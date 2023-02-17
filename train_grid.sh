@@ -11,5 +11,5 @@ python ./experiments/gridsim_v2.py --env_id grid --task_name balance \
   --replay_buffer_size 1000 --num_workers 16 --num_expert_workers 28 --batch_worker_num 16 --n_parallel 8 --expert_n_parallel 1 \
   --num_simulations 50 --mcts_num_policy_samples 10 --mcts_num_random_samples 2 \
   --mcts_num_expert_samples 4 --PER False \
-  --lr_init 0.01 --max_moves 288 --ssl_target 0 --checkpoint_interval 100 --target_update_interval 200 \
+  --lr_init 0.01 --max_moves 287 --ssl_target 0 --checkpoint_interval 100 --target_update_interval 200 \
   --test_interval 2000 --log_interval 2000 --imitation_log_std -2.0 --explore_scale 1.0 #> debug.txt
