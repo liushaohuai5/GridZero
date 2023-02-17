@@ -929,9 +929,9 @@ class MLPModel(nn.Module):
         if is_root:
             open_one_hots *= ready_masks
             close_one_hots *= closable_masks
-            sum_open_one_hots = open_one_hots.sum(2)
+            sum_open_one_hots = open_one_hots[:, :, :-1].sum(2)
             open_one_hots[:, :, -1] = 1 - sum_open_one_hots
-            sum_close_one_hots = close_one_hots.sum(2)
+            sum_close_one_hots = close_one_hots[:, :, :-1].sum(2)
             close_one_hots[:, :, -1] = 1 - sum_close_one_hots
 
         return open_one_hots.cpu().numpy(), close_one_hots.cpu().numpy()
