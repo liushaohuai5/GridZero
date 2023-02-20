@@ -26,7 +26,7 @@ def dict_to_cpu(dictionary):
 
 class ResidualForwardModel(nn.Module):
     def __init__(self, s_shape, a_shape, dyn_model, activation=nn.ReLU, use_bn=False):
-        super(ResidualForwardModel, self).__init__()
+        super().__init__()
         self.mlp = mlp(s_shape + a_shape, dyn_model, s_shape, activation=activation, use_bn=use_bn)
         # self.mlp = nn.Sequential(
         #     nn.Linear(s_shape+a_shape, dyn_model[0]),
@@ -42,7 +42,7 @@ class ResidualForwardModel(nn.Module):
 class MultipleRewardModel(nn.Module):
 
     def __init__(self, config):
-        super(MultipleRewardModel, self).__init__()
+        super().__init__()
         self.config = config
         self.use_bn = config.use_bn
         self.activation = config.activation
@@ -129,18 +129,18 @@ class MLPModel(nn.Module):
                           init_zero=config.init_zero
                           )
 
-        if self.config.add_attacker:
-            self.pi_net_attacker = mlp(self.hidden_shape, self.pi_net_shape, self.attacker_action_shape,
-                                       activation=self.activation, use_bn=self.use_bn, init_zero=config.init_zero)
+        # if self.config.add_attacker:
+        self.pi_net_attacker = mlp(self.hidden_shape, self.pi_net_shape, self.attacker_action_shape,
+                                   activation=self.activation, use_bn=self.use_bn, init_zero=config.init_zero)
 
-            self.rew_net_attacker = mlp(self.hidden_shape + self.attacker_action_shape, self.rew_net_shape,
-                                        self.full_reward_support_size,
-                                        activation=self.activation, use_bn=self.use_bn, init_zero=config.init_zero)
-            self.dyn_net_attacker = ResidualForwardModel(self.hidden_shape, self.attacker_action_shape, self.dyn_shape)
-            # self.rew_net_attacker = mlp(self.hidden_shape + 1, self.rew_net_shape,
-            #                             self.full_reward_support_size,
-            #                             activation=self.activation, use_bn=self.use_bn, init_zero=config.init_zero)
-            # self.dyn_net_attacker = ResidualForwardModel(self.hidden_shape, 1, self.dyn_shape)
+        self.rew_net_attacker = mlp(self.hidden_shape + self.attacker_action_shape, self.rew_net_shape,
+                                    self.full_reward_support_size,
+                                    activation=self.activation, use_bn=self.use_bn, init_zero=config.init_zero)
+        self.dyn_net_attacker = ResidualForwardModel(self.hidden_shape, self.attacker_action_shape, self.dyn_shape)
+        # self.rew_net_attacker = mlp(self.hidden_shape + 1, self.rew_net_shape,
+        #                             self.full_reward_support_size,
+        #                             activation=self.activation, use_bn=self.use_bn, init_zero=config.init_zero)
+        # self.dyn_net_attacker = ResidualForwardModel(self.hidden_shape, 1, self.dyn_shape)
 
         self.val_net = mlp(self.hidden_shape, self.val_net_shape, config.support_size * 2 + 1,
                            activation=self.activation, use_bn=self.use_bn, init_zero=config.init_zero)
@@ -205,7 +205,7 @@ class MLPModel(nn.Module):
         mask = action[:, -1].reshape(hidden.shape[0], 1).repeat(1, prev_r.shape[1])     # mask for no-attack
         # action_modified = torch.where(action > 0)[-1].reshape(action.shape[0], 1) / self.config.attacker_action_dim
         # predicted_r = self.rew_net_attacker(torch.cat((hidden, action_modified), dim=1))
-        predicted_r = self.rew_net_attacker(torch.cat((hidden, action), dim=1))
+        predicted_r = self.rew_net_attacker(torch.cat((hidden, action), dim=-1))
         r = mask * prev_r + (1 - mask) * predicted_r
         return r
 
@@ -449,12 +449,88 @@ class MLPModel(nn.Module):
             policy_action = policy_action.clip(-0.999, 0.999)
             policy_action = torch_utils.tensor_to_numpy(policy_action.permute(1, 0, 2))
 
-            policy_open_one_hots, policy_close_one_hots = self.determine_open_close_one_hot(policy, n_policy_action+n_random_action+n_expert_action, add_explore_noise=False, is_root=is_root)
+            policy_open_one_hots, policy_close_one_hots = self.determine_open_close_one_hot(
+                policy, n_policy_action+n_random_action+n_expert_action, add_explore_noise=False, is_root=is_root)
             policy_action = np.concatenate((policy_action, policy_open_one_hots, policy_close_one_hots), axis=2)
 
             return policy_action
 
 
+    def eval_q(self, obs, actions, attacker_actions, prev_r,
+               to_plays=None):
+        batch_shape = obs.size(0)
+        action_num = actions.size(1)
+        obs_expand = obs.reshape(obs.size(0), 1, obs.size(1)).repeat(1, actions.size(1), 1)
+        obs_expand = obs_expand.reshape(obs_expand.size(0) * obs_expand.size(1), -1)
+
+        attacker_actions = attacker_actions.reshape(batch_shape * action_num, -1)
+        actions = actions.reshape(batch_shape * action_num, -1)
+
+        h = self.encode(obs_expand)
+        to_plays = np.array([to_plays for _ in range(action_num)])
+        to_plays = to_plays.reshape(to_plays.shape[0] * to_plays.shape[1], -1).tolist()
+        prev_r = prev_r.reshape(prev_r.size(0), 1, prev_r.size(1)).repeat(1, action_num, 1)
+        prev_r = prev_r.reshape(prev_r.size(0) * prev_r.size(1), -1)
+
+        next_v, r, _, _, _ = self.recurrent_inference(h, actions, attacker_actions, to_plays, prev_r)
+
+        next_v = support_to_scalar(next_v, self.support_size, self.config.value_support_step)
+        r = support_to_scalar(r, self.reward_support_size, self.reward_support_step)
+        r = r.reshape(batch_shape, action_num, 1)
+        next_v = next_v.reshape(batch_shape, action_num, 1)
+
+        values = r + self.gamma * next_v
+
+        return values.squeeze()
+
+    # def eval_q(self, obs, actions, real_gen_ps=None, action_highs=None, action_lows=None, ready_masks=None, closable_masks=None):
+    #     if len(actions.shape) == 2:
+    #         actions = actions.reshape(1, *actions.shape)
+    #
+    #     # Obs shape = [BATCHSIZE, O_DIM]
+    #     # Obs shape = [BATCHSIZE, N, A_DIM]
+    #
+    #     batch_shape = obs.size(0)
+    #     num_actions = actions.size(1)
+    #
+    #     obs_expand = obs.reshape(obs.size(0), 1, obs.size(1)).repeat(1, actions.size(1), 1)
+    #     # print('INTERIOR', obs_expand.shape, actions.shape)
+    #
+    #     obs_expand = obs_expand.reshape(obs_expand.size(0) * obs_expand.size(1), -1)
+    #     actions = actions.reshape(actions.size(0) * actions.size(1), -1)
+    #
+    #     # print('INTERIOR_II', obs_expand.shape, actions.shape)
+    #     h = self.encode(obs_expand)
+    #     # print('H', h.shape)
+    #     r = self.reward(h, actions)
+    #     # print('R', r.shape)
+    #     next_h = self.dynamics(h, actions)
+    #     # print('NH', next_h.shape)
+    #     next_v = self.value(next_h)
+    #     next_v = support_to_scalar(next_v, self.support_size, self.config.value_support_step)
+    #     # print('NV', next_v.shape)
+    #     if self.config.multi_reward:
+    #         reward = 0
+    #         cnt = 0
+    #         for coeff, item in zip(self.config.reward_coeffs, r):
+    #             if cnt == 2 and self.config.ground_truth_running_cost_reward:
+    #                 for i in range(actions.shape[1]):
+    #                     real_root_actions = action_mapping(actions[:, i, :].cpu().numpy(), self.config, action_highs,
+    #                                                        action_lows, ready_masks, closable_masks)
+    #                     reward[:, i] += coeff * torch.from_numpy(calc_running_cost_rew(real_gen_ps+real_root_actions)).unsqueeze(1).float().to('cuda')
+    #             else:
+    #                 reward += coeff * support_to_scalar(item, self.reward_support_size, self.reward_support_step)
+    #         r = reward
+    #     else:
+    #         r = support_to_scalar(r, self.reward_support_size, self.reward_support_step)
+    #     r = r.reshape(batch_shape, num_actions, 1)
+    #     next_v = next_v.reshape(batch_shape, num_actions, 1)
+    #     # print('NV2', next_v.shape)
+    #     assert len(next_v.shape) == 3, 'Next v error'.format(next_v.shape)
+    #     assert len(r.shape) == 3, 'R shape error:{}'.format(r.shape)
+    #     values = r + self.gamma * next_v
+    #     # print('VAL', values)
+    #     return values.squeeze()
 
     def encode(self, obs):
         return self.rep_net(obs)
@@ -506,6 +582,27 @@ class MLPModel(nn.Module):
     def set_weights(self, weights):
         self.load_state_dict(weights)
 
+    def initial_inference(self, observation, to_plays):
+        # with autocast():
+        h = self.encode(observation)
+        pi = self.policy_no_split(h)
+        attacker_pi = self.policy_attacker(h)# if self.config.add_attacker else torch.zeros(h.shape[0], self.attacker_action_shape)
+        if self.config.efficient_imitation:
+            pi = torch.cat((pi, self.expert(h)), dim=-1)
+        value = self.value(h)
+        # to_plays_v = torch.from_numpy(np.asarray(to_plays)).float().to('cuda')
+        # to_plays_v = to_plays_v.reshape(to_plays_v.shape[0], 1).repeat(1, value.shape[1])
+        # value_attacker = self.value_attacker(h)
+        # value = (1 - to_plays_v) * value + to_plays_v * value_attacker
+
+        # reward equal to 0 for consistency
+        reward = (torch.zeros(1, self.full_reward_support_size)
+                  .scatter(1, torch.tensor([[self.full_reward_support_size // 2]]).long(), 1.0)
+                  .repeat(len(observation), 1)
+                  .to(observation.device))
+
+        return (value, reward, pi, attacker_pi, h)
+
     def atanh(self, x):
         return 0.5 * (torch.log(1 + x + 1e-6) - torch.log(1 - x + 1e-6))
 
@@ -538,15 +635,15 @@ class MLPModel(nn.Module):
                                                            torch.from_numpy(action_highs),
                                                            torch.from_numpy(action_lows)
                                                                ).detach().cpu().numpy()
-            # modified_action = copy.deepcopy(real_actions)
+            modified_action = copy.deepcopy(real_actions)
 
             if self.config.parameters['only_power']:
                 delta = np.expand_dims(delta_load_p, axis=1).repeat(num, axis=1) - \
-                        real_actions.sum(2) + \
+                        modified_action.sum(2) + \
                         np.expand_dims(redundency_adjust, axis=1).repeat(num, axis=1)
             else:
                 delta = np.expand_dims(delta_load_p, axis=1).repeat(num, axis=1) - \
-                        real_actions[:, :, :generator_num].sum(2) + \
+                        modified_action[:, :, :generator_num].sum(2) + \
                         np.expand_dims(redundency_adjust, axis=1).repeat(num, axis=1)
 
             # print(f'determine delta={delta}, max={np.max(np.abs(delta)):.3f}, min={np.min(np.abs(delta)):.3f}')
@@ -577,8 +674,8 @@ class MLPModel(nn.Module):
             open_action_low[:, :, settings.balanced_id] = np.expand_dims(gen_p[:, settings.balanced_id], axis=1).repeat(num, axis=1) + action_low[:, :, settings.balanced_id]
 
             close_mask = ((delta < -40).astype(np.float32)
-                          + (renewable_consump_rate < 0.6 + 0.3 * random.random()).astype(np.float32)
-                          # + (next_load_p.sum(-1) - open_action_low.sum(-1) < 80)
+                          + (renewable_consump_rate < 0.7 + 0.2 * random.random()).astype(np.float32)
+                          + (next_load_p.sum(-1) - open_action_low.sum(-1) < 80)
                           + (sum_renewable_up_redundency > 100).astype(np.float32)
                           # + (np.expand_dims(balance_down_redundency, axis=1).repeat(num, axis=1) < -20).astype(np.float32)
                           # + (q_underload.sum(-1) > 0).astype(np.float32)
@@ -815,12 +912,13 @@ class MLPModel(nn.Module):
             # real_actions = np.zeros_like(sampled_actions)
             real_actions = np.zeros((sampled_actions.shape[0], sampled_actions.shape[1], generator_num))
             for i in range(sampled_actions.shape[1]):
-                real_actions[:, i, :] = self.modify_policy(torch.from_numpy(sampled_actions[:, i, :generator_num]),
-                                                                                      torch.from_numpy(ready_mask),
-                                                                                      torch.from_numpy(closable_mask),
-                                                                                      torch.from_numpy(action_high),
-                                                                                      torch.from_numpy(action_low)
-                                                                                      )
+                real_actions[:, i, :] = self.modify_policy(
+                    torch.from_numpy(sampled_actions[:, i, :generator_num]),
+                      torch.from_numpy(ready_mask),
+                      torch.from_numpy(closable_mask),
+                      torch.from_numpy(action_high),
+                      torch.from_numpy(action_low)
+                      )
         else:
             real_actions = sampled_actions
 
@@ -838,8 +936,6 @@ class MLPModel(nn.Module):
                     (-min_gen_p * open_one_hot + min_gen_p * close_one_hot).sum(2)
 
         # print(f'check bal round2 delta={delta}, max={np.max(np.abs(delta)):.3f}, min={np.min(np.abs(delta)):.3f}')
-        # import ipdb
-        # ipdb.set_trace()
         change_mask = (np.abs(delta) > 30).astype(np.float32)
         change_mask = np.expand_dims(change_mask, axis=2).repeat(real_actions.shape[2], axis=2)
         # change_mask = np.ones_like(change_mask)
@@ -875,52 +971,6 @@ class MLPModel(nn.Module):
         modified_sampled_actions = modified_sampled_actions.clip(-0.999, 0.999)
         return np.concatenate((modified_sampled_actions, open_one_hot, close_one_hot), axis=2)
 
-
-    def eval_q(self, hidden_states, actions, attacker_actions, prev_r,
-               # real_gen_ps=None, action_highs=None, action_lows=None, ready_masks=None, closable_masks=None,
-               to_plays=None):
-        batch_shape = hidden_states.size(0)
-        action_num = actions.size(1)
-
-        attacker_actions = attacker_actions.reshape(batch_shape * action_num, -1)
-        actions = actions.reshape(batch_shape * action_num, -1)
-        h = hidden_states.repeat(action_num, 1)
-        to_plays = np.array([to_plays for _ in range(action_num)])
-        to_plays = to_plays.reshape(to_plays.shape[0] * to_plays.shape[1], -1).tolist()
-        prev_r = prev_r.repeat(action_num, 1)
-        next_v, r, _, _, _ = self.recurrent_inference(h, actions, attacker_actions, to_plays, prev_r)
-
-        next_v = support_to_scalar(next_v, self.support_size, self.config.value_support_step)
-        r = support_to_scalar(r, self.reward_support_size, self.reward_support_step)
-        r = r.reshape(batch_shape, action_num, 1)
-        next_v = next_v.reshape(batch_shape, action_num, 1)
-
-        values = r + self.gamma * next_v
-
-        return values.squeeze()
-
-
-    def initial_inference(self, observation, to_plays):
-        # with autocast():
-        h = self.encode(observation)
-        pi = self.policy_no_split(h)
-        attacker_pi = self.policy_attacker(h) if self.config.add_attacker else torch.zeros(h.shape[0], self.attacker_action_shape)
-        if self.config.efficient_imitation:
-            pi = torch.cat((pi, self.expert(h)), dim=-1)
-        value = self.value(h)
-        # to_plays_v = torch.from_numpy(np.asarray(to_plays)).float().to('cuda')
-        # to_plays_v = to_plays_v.reshape(to_plays_v.shape[0], 1).repeat(1, value.shape[1])
-        # value_attacker = self.value_attacker(h)
-        # value = (1 - to_plays_v) * value + to_plays_v * value_attacker
-
-        # reward equal to 0 for consistency
-        reward = (torch.zeros(1, self.full_reward_support_size)
-                  .scatter(1, torch.tensor([[self.full_reward_support_size // 2]]).long(), 1.0)
-                  .repeat(len(observation), 1)
-                  .to(observation.device))
-
-        return (value, reward, pi, attacker_pi, h)
-
     # @profile
     def recurrent_inference(self, h, action, attacker_action, to_plays, prev_r):
         """
@@ -937,17 +987,17 @@ class MLPModel(nn.Module):
         # with autocast():
         r = self.reward(h, action)
         h = self.dynamics(h, action)
-        if self.config.add_attacker:
-            to_plays_r = torch.from_numpy(np.asarray(to_plays)).float().to('cuda')
-            to_plays_r = to_plays_r.reshape(to_plays_r.shape[0], 1).repeat(1, r.shape[1])
-            attacker_r = self.reward_attacker(h, attacker_action, prev_r)
-            r = (1 - to_plays_r) * r + to_plays_r * attacker_r
-            to_plays_h = torch.from_numpy(np.asarray(to_plays)).float().to('cuda')
-            to_plays_h = to_plays_h.reshape(to_plays_h.shape[0], 1).repeat(1, h.shape[1])
-            attacker_h = self.dynamics_attacker(h, attacker_action)
-            h = (1 - to_plays_h) * h + to_plays_h * attacker_h
+        # if self.config.add_attacker:
+        to_plays_r = torch.from_numpy(np.asarray(to_plays)).float().to('cuda')
+        to_plays_r = to_plays_r.reshape(to_plays_r.shape[0], 1).repeat(1, r.shape[1])
+        attacker_r = self.reward_attacker(h, attacker_action, prev_r)
+        r = (1 - to_plays_r) * r + to_plays_r * attacker_r
+        to_plays_h = torch.from_numpy(np.asarray(to_plays)).float().to('cuda')
+        to_plays_h = to_plays_h.reshape(to_plays_h.shape[0], 1).repeat(1, h.shape[1])
+        attacker_h = self.dynamics_attacker(h, attacker_action)
+        h = (1 - to_plays_h) * h + to_plays_h * attacker_h
         pi = self.policy_no_split(h)
-        attacker_pi = self.policy_attacker(h) if self.config.add_attacker else torch.zeros(h.shape[0], self.attacker_action_shape)
+        attacker_pi = self.policy_attacker(h) #if self.config.add_attacker else torch.zeros(h.shape[0], self.attacker_action_shape)
         if self.config.efficient_imitation:
             pi = torch.cat((pi, self.expert(h)), dim=-1)
         value = self.value(h)

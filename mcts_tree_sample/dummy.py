@@ -30,7 +30,7 @@ def run_multi_support_adversarial(observations, model, config,
             model.initial_inference(torch_utils.numpy_to_tensor(observations), is_attackers.tolist())
 
         # if root_reward_pred.size(-1) != 1:
-        #     root_reward = torch_utils.support_to_scalar(root_reward_pred, config.reward_support_size, config.reward_support_step)
+        #     root_reward_pred = torch_utils.support_to_scalar(root_reward_pred, config.reward_support_size, config.reward_support_step)
         if root_rewards is not None:
             root_reward = torch_utils.numpy_to_tensor(root_rewards)
 
@@ -65,8 +65,8 @@ def run_multi_support_adversarial(observations, model, config,
                                          config.reward_support_step).squeeze()
 
         q_values = model.eval_q(
-            # torch_utils.numpy_to_tensor(observations),
-                                roots_hidden_state,
+            torch_utils.numpy_to_tensor(observations),
+                                # roots_hidden_state,
                                 torch_utils.numpy_to_tensor(root_actions),
                                 torch_utils.numpy_to_tensor(root_attacker_actions),
                                 prev_r=prev_rewards,
@@ -74,15 +74,19 @@ def run_multi_support_adversarial(observations, model, config,
                                 # action_highs, action_lows, ready_masks, closable_masks,
                                 to_plays=is_attackers
                                 )
+        # q_values = model.eval_q(torch_utils.numpy_to_tensor(observations),
+        #                         torch_utils.numpy_to_tensor(root_actions),
+        #                         origin_states[:, 1:55],
+        #                         action_highs, action_lows, ready_masks, closable_masks
+        #                         )
         if root_num == 1:
             q_values = q_values.reshape(1, *q_values.shape)
 
         hidden_state_idx_1 = 0
 
+        n_total_actions = config.mcts_num_policy_samples + config.mcts_num_random_samples
         if config.efficient_imitation:
-            n_total_actions = config.mcts_num_policy_samples + config.mcts_num_random_samples + config.mcts_num_expert_samples
-        else:
-            n_total_actions = config.mcts_num_policy_samples + config.mcts_num_random_samples
+            n_total_actions += config.mcts_num_expert_samples
 
         roots = tree.Roots(root_num, n_total_actions, config.num_simulations)
         noises = [np.random.dirichlet([config.root_dirichlet_alpha] * config.action_space_size).astype(

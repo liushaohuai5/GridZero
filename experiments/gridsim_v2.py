@@ -127,7 +127,7 @@ class GridSimExperientConfig:
         self.mlp_hidden_shape = 256
         self.mlp_proj_shape = 256
         self.mlp_dyn_shape = [256, 256]
-        self.mlp_rep_shape = [256, ]
+        self.mlp_rep_shape = [512, ]
         self.mlp_rew_shape = [256, 256]
         self.mlp_val_shape = [256, ]
         self.mlp_pi_shape = [256, ]
@@ -200,7 +200,7 @@ class GridSimExperientConfig:
         self.value_loss_coeff = 1.0    # Switch to 1.0 can be better .?
         self.entropy_loss_coeff = 0.01  # prev 0.01
         self.consistency_loss_coeff = 0.5
-        self.imitation_loss_coeff = 0.01
+        self.imitation_loss_coeff = 0.1
         self.max_grad_norm = 10
 
         self.selfplay_model_serve_num = 4

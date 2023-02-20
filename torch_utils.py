@@ -135,8 +135,7 @@ def support_to_scalar(logits, support_size, step_size=1.0):
         torch.tensor([x * step_size for x in range(-support_size, support_size + 1)])
         .expand(probabilities.shape)
         .float()
-        .to('cuda')
-        # .to(device=probabilities.device)
+        .to(device=probabilities.device)
     )
     x = torch.sum(support * probabilities, dim=1, keepdim=True)
 

@@ -126,7 +126,7 @@ class LowDimFastBatchTargetWorker:
         return None
 
     def spin(self):
-        while ray.get(self.shared_storage.get_info.remote("num_played_games")) < 5:  # previous 5
+        while ray.get(self.shared_storage.get_info.remote("num_played_games")) < 5:
             time.sleep(1)
 
         if self.config.efficient_imitation:
@@ -140,8 +140,7 @@ class LowDimFastBatchTargetWorker:
 
             training_step = ray.get(self.shared_storage.get_info.remote("training_step"))
             target_update_index = training_step // self.config.target_update_interval
-            # try:
-                # x = time.time()
+            # x = time.time()
             if target_update_index > self.last_target_update_index:
                 self.last_target_update_index = target_update_index
                 target_weights = ray.get(self.shared_storage.get_info.remote("target_weights"))
@@ -149,13 +148,13 @@ class LowDimFastBatchTargetWorker:
                 self.model.to('cuda')
                 self.model.eval()
                 print("batch worker model updated !!!")
-            batch = self.get_batch(train_steps=training_step)
-            self.batch_buffer.push([batch])
-                # print(f'prepare batch time:{time.time()-x:.3f}')
-            # except:
-            #     continue
+            try:
+                batch = self.get_batch(train_steps=training_step)
+                self.batch_buffer.push([batch])
+            except:
+                continue
                 # print(f'batchQ={self.batch_buffer.get_len()}')
-
+            # print(f'prepare batch time:{time.time()-x:.3f}')
             # time.sleep(0.2)
 
     # @profile
@@ -193,7 +192,6 @@ class LowDimFastBatchTargetWorker:
              )
 
         weight_batch = [] if self.config.PER else None
-        # x = time.time()
         game_samples = ray.get(self.replay_buffer.sample_n_games.remote(self.config.batch_size, force_uniform=False))
         n_total_samples = len(game_samples)
 
@@ -202,8 +200,6 @@ class LowDimFastBatchTargetWorker:
         """
         all_bootstrap_values = []
         for i in range(self.config.num_unroll_steps_reanalyze + 1):
-            # print(f'reanalyze {i}')
-
             begin_observation = []
             begin_origin_state = []
             begin_ready_mask = []
@@ -212,7 +208,6 @@ class LowDimFastBatchTargetWorker:
             begin_action_low = []
             begin_attacker_flags = []
             begin_reward = []
-
             bootstrap_observation = []
             bootstrap_origin_state = []
             bootstrap_mask = []

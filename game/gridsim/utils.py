@@ -429,10 +429,10 @@ def get_state_from_obs(obs, settings, parameters):
         # state.append(np.reshape(np.array(obs.flag, dtype=np.float32), (-1,)))
         # state.append(np.reshape(np.array(obs.gen_status, dtype=np.float32)[np.asarray(settings.thermal_ids)], (-1,)))
 
-        state.append(np.reshape(np.array(obs.steps_to_recover_gen, dtype=np.float32)[settings.thermal_ids], (-1,)) /
-                     np.array(settings.max_steps_to_recover_gen)[settings.thermal_ids])
-        state.append(np.reshape(np.array(obs.steps_to_close_gen, dtype=np.float32)[settings.thermal_ids], (-1,)) /
-                     np.array(settings.max_steps_to_close_gen)[settings.thermal_ids])
+        state.append(np.reshape(np.array(obs.steps_to_recover_gen, dtype=np.float32)[settings.thermal_ids], (-1,))) #/
+                     # np.array(settings.max_steps_to_recover_gen)[settings.thermal_ids])
+        state.append(np.reshape(np.array(obs.steps_to_close_gen, dtype=np.float32)[settings.thermal_ids], (-1,))) #/
+                     # np.array(settings.max_steps_to_close_gen)[settings.thermal_ids])
         # state.append(np.reshape(np.array(obs.count_soft_overflow_steps, dtype=np.float32), (-1,)))
         # state.append(np.reshape(np.array(obs.steps_to_reconnect_line, dtype=np.float32), (-1,)))
 

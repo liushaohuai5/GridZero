@@ -452,12 +452,13 @@ class ExpertPlay:
         while training_steps < self.config.training_steps:
             training_steps = ray.get(self.shared_storage.get_info.remote("training_step"))
             new_model_index = training_steps // self.config.checkpoint_interval
+            if new_model_index > self.last_model_index:
+                self.last_model_index = new_model_index
+                self.model.set_weights(ray.get(self.shared_storage.get_info.remote("weights")))
+                self.model.to('cuda')
+                self.model.eval()
+
             try:
-                if new_model_index > self.last_model_index:
-                    self.last_model_index = new_model_index
-                    self.model.set_weights(ray.get(self.shared_storage.get_info.remote("weights")))
-                    self.model.to('cuda')
-                    self.model.eval()
                 game_histories = self.play_expert_games(training_steps)
             except:
                 continue
@@ -740,7 +741,7 @@ class ExpertPlay:
                 mcts_attacker_action = root_attacker_actions[i]
                 mcts_visit_count = root_visit_counts[i]
 
-                action = self.select_action(mcts_action, mcts_visit_count,
+                action1 = self.select_action(mcts_action, mcts_visit_count,
                                             self.config.visit_softmax_temperature_fn(trained_steps))
                 attacker_action = self.select_action(mcts_attacker_action, mcts_visit_count,
                                                      self.config.visit_softmax_temperature_fn(trained_steps))
@@ -769,9 +770,9 @@ class ExpertPlay:
 
                 else:
                     if not self.config.multi_on_off:
-                        action_true1 = combine_one_hot_action(ori_states[i], action, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i])
+                        action_true1 = combine_one_hot_action(ori_states[i], action1, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i])
                     else:
-                        action_true1 = modify_action_v3(action, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i])
+                        action_true1 = modify_action_v3(action1, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i])
                     action_true, _, open_hot, close_hot = self.traditional_solver.run_opf(observations[i])
                     action_true = action_true.clip(action_lows[i], action_highs[i])
                     action = (action_true - action_lows[i]) / (action_highs[i] - action_lows[i] + 1e-3) * 2 - 1
@@ -928,17 +929,16 @@ class SelfPlay:
         while training_steps < self.config.training_steps:
             training_steps = ray.get(self.shared_storage.get_info.remote("training_step"))
             new_model_index = training_steps // self.config.checkpoint_interval
-
-            # try:
             if new_model_index > self.last_model_index:
                 self.last_model_index = new_model_index
                 self.model.set_weights(ray.get(self.shared_storage.get_info.remote("weights")))
                 self.model.to('cuda')
                 self.model.eval()
                 print("selfplay update!!!!!!!!")
-            game_histories = self.play_multi_games(training_steps)
-            # except:
-            #     continue
+            try:
+                game_histories = self.play_multi_games(training_steps)
+            except:
+                continue
 
             self.shared_storage.set_info.remote(
                 {

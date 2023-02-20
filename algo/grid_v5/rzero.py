@@ -19,9 +19,8 @@ torch.autograd.set_detect_anomaly(True)
 
 class Trainer:
     def __init__(self, checkpoint, config):
-        self.model = MLPModel(config)
+        self.model = MLPModel(config).to(torch.device('cuda'))
         self.model.set_weights(copy.deepcopy(checkpoint["weights"]))
-        self.model.to('cuda')
         self.model.train()
 
         self.target_model = MLPModel(config).to(torch.device('cuda'))
@@ -33,9 +32,10 @@ class Trainer:
         self.scaler = GradScaler()
 
         if config.optimizer == 'SGD':
-            # if self.config.imitation:
-            self.optimizer = optim.SGD(self.model.parameters(), lr=config.lr_init,
-                                       weight_decay=config.weight_decay, momentum=config.momentum
+            self.optimizer = optim.SGD(self.model.parameters(),
+                                       lr=config.lr_init,
+                                       weight_decay=config.weight_decay,
+                                       momentum=config.momentum
             )
         else:
             self.optimizer = optim.Adam(
@@ -148,8 +148,8 @@ class Trainer:
         #           torch.clamp(expert_action[:, action_dim:action_dim + one_hot_dim] + 1e-3, 0, 1)).sum(1)
         # loss += -(torch.log_softmax(expert_policy[:, 2 * action_dim + one_hot_dim:], dim=1) *
         #           torch.clamp(expert_action[:, action_dim + one_hot_dim:] + 1e-3, 0, 1)).sum(1)
-        if self.config.add_attacker:
-            loss = loss * mask
+        # if self.config.add_attacker:
+        loss = loss * mask
 
         return loss
 
@@ -173,8 +173,6 @@ class Trainer:
 
         # if self.config.parameters['only_power']:
         target_action[:, :, :action_dim] = target_action[:, :, :action_dim].clip(-0.999, 0.999)
-        # target_action[:, :, :action_dim] = torch.clamp(target_action[:, :, :action_dim], -0.999, 0.999)
-        # distr = SquashedNormal(policy[:, :action_dim], policy[:, action_dim:2 * action_dim].clip(-1e3, 80).exp() + 5e-4)
         distr = SquashedNormal(policy[:, :action_dim], policy[:, action_dim:2 * action_dim].exp() + 5e-4)
         # else:
         #     target_action[:, :, :2*generator_num] = target_action[:, :, :2*generator_num].clip(-0.999, 0.999)
@@ -215,11 +213,10 @@ class Trainer:
 
         ent_action = distr.rsample()
         ent_action = ent_action.clip(-0.999, 0.999)
-        # ent_action = torch.clamp(ent_action, -0.999, 0.999)
         if self.config.parameters['only_power']:
-            ent_log_prob = distr.log_prob(ent_action).sum(-1)
+            ent_log_prob = distr.log_prob(ent_action).sum(-1, keepdim=True)
         else:
-            ent_log_prob = distr.log_prob(ent_action)[:, :generator_num].sum(-1)
+            ent_log_prob = distr.log_prob(ent_action)[:, :generator_num].sum(-1, keepdim=True)
 
         entropy = -ent_log_prob
 
@@ -229,9 +226,9 @@ class Trainer:
             voltage_mu, voltage_log_std = policy[:, generator_num:2*generator_num], policy[:, 3*generator_num:4*generator_num]
             mean_voltage_mu = voltage_mu.mean(-1).unsqueeze(1).repeat(1, generator_num)
             loss += torch.sum((voltage_mu - mean_voltage_mu)**2)
-        if self.config.add_attacker:
-            loss = loss * mask
-            entropy = entropy * mask
+        # if self.config.add_attacker:
+        loss = loss * mask
+        entropy = entropy * mask
 
         return loss, entropy
 
@@ -322,14 +319,16 @@ class Trainer:
                     self.training_step, batch_step, policy_loss, attacker_policy_loss, value_loss, reward_loss,
                     consistency_loss, entropy_loss, imitation_loss, time.time() - x, self.config.use_amp, batch_buffer.get_len()
                 ))
+                # print(f'policy_loss_coeff={self.config.policy_loss_coeff}, entropy_loss_coeff={self.config.entropy_loss_coeff}')
+                print(f'target_policy = {batch[10][0][0]}')
                 # print(f'action_batch_max={np.max(np.abs(batch[2]))}')
 
             if self.training_step % self.config.target_update_interval == 0:
                 self.target_weight = copy.deepcopy(self.model.get_weights())
                 self.target_model.set_weights(self.model.get_weights())
-                # shared_storage.set_info.remote({
-                #     "weights": copy.deepcopy(self.model.get_weights())
-                # })
+                shared_storage.set_info.remote({
+                    "weights": copy.deepcopy(self.model.get_weights())
+                })
                 shared_storage.set_info.remote({
                         "target_weights": copy.deepcopy(self.target_weight),
                 })
@@ -567,8 +566,7 @@ class Trainer:
             attacker_policy_loss_0 = self.loss_attacker_pi(policy_info_attacker[:batch_size//2],
                                                            raw_attacker_action_batch[0][:batch_size//2],
                                                            raw_policy_batch[0][:batch_size//2],
-                                                           attacker_flag_batch[:batch_size//2, 0]) \
-                if self.config.add_attacker else torch.zeros_like(policy_loss_0)
+                                                           attacker_flag_batch[:batch_size//2, 0]) #if self.config.add_attacker else torch.zeros_like(policy_loss_0)
             imitation_loss_0 = self.loss_imitation(
                 expert_policy[batch_size // 2:],
                 action_batch[batch_size // 2:, 1],
@@ -586,8 +584,7 @@ class Trainer:
             policy_loss_0, entropy = self.loss_pi_kl_fn(policy_info, raw_action_batch[0], raw_policy_batch[0],
                                                         attacker_flag_batch[:, 0])
             attacker_policy_loss_0 = self.loss_attacker_pi(policy_info_attacker, raw_attacker_action_batch[0],
-                                                           raw_policy_batch[0], attacker_flag_batch[:, 0]) \
-                if self.config.add_attacker else torch.zeros_like(policy_loss_0)
+                                                           raw_policy_batch[0], attacker_flag_batch[:, 0]) #if self.config.add_attacker else torch.zeros_like(policy_loss_0)
             pred_value_scalar = (
                 torch_utils.support_to_scalar(value,
                                               self.config.support_size,
@@ -655,8 +652,7 @@ class Trainer:
                     attacker_policy_loss_i = self.loss_attacker_pi(policy_info_attacker[:batch_size//2],
                                                                    raw_attacker_action_batch[i][:batch_size//2],
                                                                    raw_policy_batch[i][:batch_size//2],
-                                                                   attacker_flag_batch[:batch_size//2, i]) \
-                        if self.config.add_attacker else torch.zeros_like(policy_loss_i)
+                                                                   attacker_flag_batch[:batch_size//2, i]) #if self.config.add_attacker else torch.zeros_like(policy_loss_i)
                     pred_value_scalar = (
                         torch_utils.support_to_scalar(value[:batch_size//2],
                                                       self.config.support_size,
@@ -669,8 +665,7 @@ class Trainer:
                     policy_loss_i, entropy = self.loss_pi_kl_fn(policy_info, raw_action_batch[i], raw_policy_batch[i],
                                                                 attacker_flag_batch[:, i])
                     attacker_policy_loss_i = self.loss_attacker_pi(policy_info_attacker, raw_attacker_action_batch[i],
-                                                                   raw_policy_batch[i], attacker_flag_batch[:, i]) \
-                        if self.config.add_attacker else torch.zeros_like(policy_loss_i)
+                                                                   raw_policy_batch[i], attacker_flag_batch[:, i]) #if self.config.add_attacker else torch.zeros_like(policy_loss_i)
                     pred_value_scalar = (
                         torch_utils.support_to_scalar(value,
                                                       self.config.support_size,
@@ -695,8 +690,8 @@ class Trainer:
 
         if self.config.efficient_imitation:
             loss += self.config.imitation_loss_coeff * imitation_loss.mean()
-        if self.config.add_attacker:
-            loss += self.config.attacker_policy_loss_coeff * attacker_policy_loss
+        # if self.config.add_attacker:
+        loss += self.config.attacker_policy_loss_coeff * attacker_policy_loss.mean()
 
         loss.register_hook(lambda grad: grad * (1 / self.config.num_unroll_steps))
         parameters = self.model.parameters()

@@ -525,6 +525,7 @@ namespace tree{
 
         if (is_attacker){
             value_score = -value_score;
+//            printf("inverse value !!!!!!!!!!!!!!\n");
         }
 
         value_score = min_max_stats.normalize(value_score);
