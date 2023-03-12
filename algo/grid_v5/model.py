@@ -456,8 +456,8 @@ class MLPModel(nn.Module):
             return policy_action
 
 
-    def eval_q(self, obs, actions, attacker_actions, prev_r,
-               to_plays=None):
+    def eval_q(self, obs, actions, attacker_actions, prev_r, to_plays=None):
+        # with autocast():
         batch_shape = obs.size(0)
         action_num = actions.size(1)
         obs_expand = obs.reshape(obs.size(0), 1, obs.size(1)).repeat(1, actions.size(1), 1)
@@ -533,7 +533,9 @@ class MLPModel(nn.Module):
     #     return values.squeeze()
 
     def encode(self, obs):
-        return self.rep_net(obs)
+        # with autocast():
+        h = self.rep_net(obs)
+        return h
 
     def dynamics(self, hidden, action):
         return self.dyn_net(hidden, action)
@@ -582,18 +584,14 @@ class MLPModel(nn.Module):
     def set_weights(self, weights):
         self.load_state_dict(weights)
 
-    def initial_inference(self, observation, to_plays):
+    def initial_inference(self, observation):
         # with autocast():
         h = self.encode(observation)
         pi = self.policy_no_split(h)
-        attacker_pi = self.policy_attacker(h)# if self.config.add_attacker else torch.zeros(h.shape[0], self.attacker_action_shape)
+        attacker_pi = self.policy_attacker(h)
         if self.config.efficient_imitation:
             pi = torch.cat((pi, self.expert(h)), dim=-1)
         value = self.value(h)
-        # to_plays_v = torch.from_numpy(np.asarray(to_plays)).float().to('cuda')
-        # to_plays_v = to_plays_v.reshape(to_plays_v.shape[0], 1).repeat(1, value.shape[1])
-        # value_attacker = self.value_attacker(h)
-        # value = (1 - to_plays_v) * value + to_plays_v * value_attacker
 
         # reward equal to 0 for consistency
         reward = (torch.zeros(1, self.full_reward_support_size)
@@ -627,15 +625,15 @@ class MLPModel(nn.Module):
                                 (1 - np.sign(balance_down_redundency)) / 2 * (
                                             balance_down_redundency - addition)
 
-            real_actions = np.zeros_like(modified_action)
-            for i in range(modified_action.shape[1]):
-                real_actions[:, i, :] = self.modify_policy(torch.from_numpy(modified_action[:, i, :]),
-                                                           torch.from_numpy(ready_masks[:, i, :]).squeeze(1),
-                                                           torch.from_numpy(closable_masks[:, i, :]).squeeze(1),
-                                                           torch.from_numpy(action_highs),
-                                                           torch.from_numpy(action_lows)
-                                                               ).detach().cpu().numpy()
-            modified_action = copy.deepcopy(real_actions)
+            # real_actions = np.zeros_like(modified_action)
+            # for i in range(modified_action.shape[1]):
+            #     real_actions[:, i, :] = self.modify_policy(torch.from_numpy(modified_action[:, i, :]),
+            #                                                torch.from_numpy(ready_masks[:, i, :]).squeeze(1),
+            #                                                torch.from_numpy(closable_masks[:, i, :]).squeeze(1),
+            #                                                torch.from_numpy(action_highs),
+            #                                                torch.from_numpy(action_lows)
+            #                                                    ).detach().cpu().numpy()
+            # modified_action = copy.deepcopy(real_actions)
 
             if self.config.parameters['only_power']:
                 delta = np.expand_dims(delta_load_p, axis=1).repeat(num, axis=1) - \
@@ -867,18 +865,19 @@ class MLPModel(nn.Module):
         #             real_actions.sum(2) + \
         #             np.expand_dims(redundency_adjust, axis=1).repeat(real_actions.shape[1], axis=1))
 
-        if not norm_action:
-            return real_actions.squeeze()
-
-        modified_sampled_actions = (real_actions - np.expand_dims(action_low, axis=1).repeat(real_actions.shape[1], axis=1)) / \
-                                   (np.expand_dims(action_high, axis=1).repeat(real_actions.shape[1], axis=1) -
-                                    np.expand_dims(action_low, axis=1).repeat(real_actions.shape[1], axis=1) + 1e-3) * 2 - 1
-
-        modified_sampled_actions = modified_sampled_actions * np.expand_dims(mask, axis=1).repeat(real_actions.shape[1], axis=1) + \
-                                   sampled_actions * np.expand_dims(inv_mask, axis=1).repeat(real_actions.shape[1], axis=1)
-
-        modified_sampled_actions = modified_sampled_actions.clip(-0.999, 0.999)
-        return modified_sampled_actions
+        # if not norm_action:
+        #     return real_actions.squeeze()
+        #
+        # modified_sampled_actions = (real_actions - np.expand_dims(action_low, axis=1).repeat(real_actions.shape[1], axis=1)) / \
+        #                            (np.expand_dims(action_high, axis=1).repeat(real_actions.shape[1], axis=1) -
+        #                             np.expand_dims(action_low, axis=1).repeat(real_actions.shape[1], axis=1) + 1e-3) * 2 - 1
+        #
+        # modified_sampled_actions = modified_sampled_actions * np.expand_dims(mask, axis=1).repeat(real_actions.shape[1], axis=1) + \
+        #                            sampled_actions * np.expand_dims(inv_mask, axis=1).repeat(real_actions.shape[1], axis=1)
+        #
+        # modified_sampled_actions = modified_sampled_actions.clip(-0.999, 0.999)
+        # return modified_sampled_actions
+        return real_actions
 
 
     def check_balance_round2(self, state, sampled_actions, action_high, action_low, ready_mask, closable_mask, norm_action=True):
@@ -908,19 +907,20 @@ class MLPModel(nn.Module):
             mask *= power_mask
         inv_mask = np.ones_like(mask) - mask  # represent non-adjustable generators, voltage control, closed or balance or open_gen_logit
 
-        if norm_action:
-            # real_actions = np.zeros_like(sampled_actions)
-            real_actions = np.zeros((sampled_actions.shape[0], sampled_actions.shape[1], generator_num))
-            for i in range(sampled_actions.shape[1]):
-                real_actions[:, i, :] = self.modify_policy(
-                    torch.from_numpy(sampled_actions[:, i, :generator_num]),
-                      torch.from_numpy(ready_mask),
-                      torch.from_numpy(closable_mask),
-                      torch.from_numpy(action_high),
-                      torch.from_numpy(action_low)
-                      )
-        else:
-            real_actions = sampled_actions
+        # if norm_action:
+        #     # real_actions = np.zeros_like(sampled_actions)
+        #     real_actions = np.zeros((sampled_actions.shape[0], sampled_actions.shape[1], generator_num))
+        #     for i in range(sampled_actions.shape[1]):
+        #         real_actions[:, i, :] = self.modify_policy(
+        #             torch.from_numpy(sampled_actions[:, i, :generator_num]),
+        #               torch.from_numpy(ready_mask),
+        #               torch.from_numpy(closable_mask),
+        #               torch.from_numpy(action_high),
+        #               torch.from_numpy(action_low)
+        #               )
+        # else:
+        #     real_actions = sampled_actions
+        real_actions = sampled_actions[:, :, :generator_num]
 
         min_gen_p = np.expand_dims(np.append(np.array(settings.min_gen_p), 0), axis=0).repeat(sampled_actions.shape[0], axis=0)
         min_gen_p = np.expand_dims(min_gen_p, axis=1).repeat(sampled_actions.shape[1], axis=1)
@@ -958,8 +958,8 @@ class MLPModel(nn.Module):
         #             np.expand_dims(redundency_adjust, axis=1).repeat(real_actions.shape[1], axis=1))
         # real_actions += modification * change_mask * power_mask
 
-        if not norm_action:
-            return real_actions.squeeze()
+        # if not norm_action:
+        #     return real_actions.squeeze()
 
         modified_sampled_actions = (modified_actions - np.expand_dims(action_low, axis=1).repeat(modification.shape[1], axis=1)) / \
                                    (np.expand_dims(action_high, axis=1).repeat(modified_actions.shape[1], axis=1) -
@@ -987,7 +987,6 @@ class MLPModel(nn.Module):
         # with autocast():
         r = self.reward(h, action)
         h = self.dynamics(h, action)
-        # if self.config.add_attacker:
         to_plays_r = torch.from_numpy(np.asarray(to_plays)).float().to('cuda')
         to_plays_r = to_plays_r.reshape(to_plays_r.shape[0], 1).repeat(1, r.shape[1])
         attacker_r = self.reward_attacker(h, attacker_action, prev_r)
@@ -997,7 +996,7 @@ class MLPModel(nn.Module):
         attacker_h = self.dynamics_attacker(h, attacker_action)
         h = (1 - to_plays_h) * h + to_plays_h * attacker_h
         pi = self.policy_no_split(h)
-        attacker_pi = self.policy_attacker(h) #if self.config.add_attacker else torch.zeros(h.shape[0], self.attacker_action_shape)
+        attacker_pi = self.policy_attacker(h)
         if self.config.efficient_imitation:
             pi = torch.cat((pi, self.expert(h)), dim=-1)
         value = self.value(h)

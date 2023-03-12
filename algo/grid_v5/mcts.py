@@ -234,7 +234,7 @@ class MCTS:
             policy_info,
             attacker_policy_info,
             hidden_state,
-        ) = model.initial_inference(torch_utils.numpy_to_tensor(observation), [root.to_play])
+        ) = model.initial_inference(torch_utils.numpy_to_tensor(observation))
 
         # action_dim = policy_info.shape[-1] // 4
         # root.policy_sigma = policy_info[:, action_dim:2*action_dim].exp().mean().cpu().numpy()

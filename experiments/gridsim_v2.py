@@ -49,8 +49,10 @@ class GridSimExperientConfig:
         self.add_attacker = False
         self.attack_all = False
         self.N_k = 1
+        self.attack_prob = 0.2
 
         self.is_plot = True
+        self.log_pic = False
 
         self.use_amp = False
         self.use_bn = False
@@ -62,7 +64,7 @@ class GridSimExperientConfig:
 
         self.reward_func = 'self_reward'
         # self.reward_func = 'epri_reward'
-        self.coeff_line_over_flow = 1
+        self.coeff_line_over_flow = 3
         self.coeff_line_disconnect = 1
         self.coeff_renewable_consumption = 2
         self.coeff_thermal_backup = 1
@@ -198,14 +200,15 @@ class GridSimExperientConfig:
         self.attacker_policy_loss_coeff = 1.0
         self.reward_loss_coeff = 1.0
         self.value_loss_coeff = 1.0    # Switch to 1.0 can be better .?
-        self.entropy_loss_coeff = 0.01  # prev 0.01
+        self.entropy_loss_coeff = 0.001  # prev 0.01
         self.consistency_loss_coeff = 0.5
-        self.imitation_loss_coeff = 0.1
+        self.imitation_loss_coeff = 0.01
         self.max_grad_norm = 10
 
         self.selfplay_model_serve_num = 4
         self.model_worker_serve_num = 2
         self.batch_worker_num = 24 if not self.only_imitate_policy else 1
+        self.cpu_workers_num = 4
         self.support_size = 200
         self.value_support_step = 0.5
         self.reward_support_size = 200

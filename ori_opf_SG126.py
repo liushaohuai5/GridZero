@@ -24,6 +24,7 @@ from pypower.idx_bus import PD
 from pypower.idx_gen import GEN_STATUS, PG, QG, PMIN, PMAX, MU_PMIN
 
 from numpy import flatnonzero as find
+from model_jm.plot_sg126_net import Visualizer
 
 
 class HiddenPrints:
@@ -253,6 +254,7 @@ class traditional_solver:
         self.dc_opf_flag = dc_opf_flag
         self.unit_comb_flag = unit_comb_flag
         self.for_training_flag = for_training_flag
+        self.visualizer = Visualizer()
 
     def spin(self):
         voltage_violations, reactive_violations, bal_p_violations, soft_overflows, hard_overflows = 0, 0, 0, 0, 0
@@ -303,15 +305,21 @@ class traditional_solver:
         score = 0
         step = 0
 
+        # if not os.path.exists(
+        #         os.path.join('./results/gridsim_v2/trad_expert', f'figs/epi_{start_idx}_{opt_name}')):
+        #     os.makedirs(os.path.join('./results/gridsim_v2/trad_expert', f'figs/epi_{start_idx}_{opt_name}'))
+        # self.visualizer.plot(observation.gen_p, observation.gen_q, observation.load_p,
+        #                      observation.load_q, observation.gen_status,
+        #                      save_path=os.path.join('./results/gridsim_v2/trad_expert',
+        #                                             f'figs/epi_{start_idx}_{opt_name}'),
+        #                      step=step)
+
         if expert_uc is not None:
             tmp = np.zeros_like(expert_uc[:, :, 0:1])
             expert_uc = np.concatenate((expert_uc, tmp), axis=2)
 
         while not done and step < 288:
             last_observation = copy.deepcopy(observation)
-            # if step == 86:
-            #     import ipdb
-            #     ipdb.set_trace()
             adjust_gen_p, result, _, _ = self.run_opf(observation, expert_uc[:, :, step:step+3] if expert_uc is not None else None)
             observation, reward, done, info = self.game.step(adjust_gen_p, ori_obs=True)
             state, ready_mask, closable_mask = get_state_from_obs(observation, settings, self.config.parameters)
@@ -383,6 +391,15 @@ class traditional_solver:
             score += reward
             step += 1
 
+            # if not os.path.exists(
+            #         os.path.join('./results/gridsim_v2/trad_expert', f'figs/epi_{start_idx}_{opt_name}')):
+            #     os.makedirs(os.path.join('./results/gridsim_v2/trad_expert', f'figs/epi_{start_idx}_{opt_name}'))
+            # self.visualizer.plot(observation.gen_p, observation.gen_q, observation.load_p,
+            #                      observation.load_q, observation.gen_status,
+            #                      save_path=os.path.join('./results/gridsim_v2/trad_expert',
+            #                                             f'figs/epi_{start_idx}_{opt_name}'),
+            #                      step=step)
+
         headers = ('load', 'actual', 'max', 'closed_num', 'closable_num', 'renewable_prediction', 'open_action_high', 'open_action_low', 'gen_status')
         if opt_name is not None:
             path = os.path.join('./results/gridsim_v2/trad_expert/', f'new_data_{start_idx}_{opt_name}.csv')
@@ -414,48 +431,44 @@ class traditional_solver:
             if self.unit_comb_flag:
                 result, open_hot, close_hot = self.run_uopf(observation, ppopt)
             else:
-                result = opf(self.ppc, ppopt)
                 open_hot = np.zeros(settings.num_gen + 1)
                 close_hot = np.zeros(settings.num_gen + 1)
                 if expert_uc is not None:
-                    result['gen'][:, 1] = result['gen'][:, 1].clip(self.ppc['gen'][:, 9], self.ppc['gen'][:, 8])
+                    cnt = 0
                     for i, u in enumerate(settings.thermal_ids):
                         # # if close at next step or start at this step
+                        if cnt == 1:
+                            break
                         if expert_uc[2, i, 0] == 1:
                             if closable_mask[u] == 1:
-                                # result['gen'][u, 1] = 0
                                 self.ppc['gen'][u, 9] = 0
                                 self.ppc['gen'][u, 8] = 0
-                            else:
-                                pass
-                                # result['gen'][u, 1] = self.ppc['gen'][u, 9]
-                        # if plan is closed, and not closed now, reduce power
+                                cnt += 1
+                            # else:
+                            #     self.ppc['gen'][u, 8] = self.ppc['gen'][u, 9]
+
                         if expert_uc[0, i, 0] == 0 and observation.gen_status[u] == 1:
                             if closable_mask[u] == 1:
-                                # result['gen'][u, 1] = 0
                                 self.ppc['gen'][u, 9] = 0
                                 self.ppc['gen'][u, 8] = 0
-                            else:
-                                pass
-                                # result['gen'][u, 1] = self.ppc['gen'][u, 9]
+                                cnt += 1
+                            # else:
+                            #     self.ppc['gen'][u, 8] = self.ppc['gen'][u, 9]
+
+                    for i, u in enumerate(settings.thermal_ids):
                         # if turn-on and steps==0
                         if expert_uc[1, i, 0] == 1:
                             if ready_mask[u] == 1:
-                                # result['gen'][u, 1] = settings.min_gen_p[u]
                                 self.ppc['gen'][u, 8] = settings.min_gen_p[u]
-                                self.ppc['gen'][u, 9] = settings.max_gen_p[u]
-                            else:
-                                # result['gen'][u, 1] = self.ppc['gen'][u, 8]
-                                pass
-                        # if plan is on, actually off
+                                self.ppc['gen'][u, 9] = settings.min_gen_p[u]
+                            break
+
                         if expert_uc[0, i, 0] == 1 and observation.gen_status[u] == 0:
                             if ready_mask[u] == 1:
-                                # result['gen'][u, 1] = settings.min_gen_p[u]
                                 self.ppc['gen'][u, 8] = settings.min_gen_p[u]
-                                self.ppc['gen'][u, 9] = settings.max_gen_p[u]
-                            else:
-                                # result['gen'][u, 1] = self.ppc['gen'][u, 8]
-                                pass
+                                self.ppc['gen'][u, 9] = settings.min_gen_p[u]
+                            break
+
                     result = opf(self.ppc, ppopt)
                     result['gen'][:, 1] = result['gen'][:, 1].clip(self.ppc['gen'][:, 9], self.ppc['gen'][:, 8])
 
@@ -476,7 +489,7 @@ class traditional_solver:
                         # if expert_uc[0, i, 0] == 0 and observaion.gen_p[u] >= settings.min_gen_p[u]:
                         if expert_uc[0, i, 0] == 0 and observation.gen_status[u] == 1:
                             result['gen'][u, 1] = self.ppc['gen'][u, 9]
-                        # if turn-on and steps==0
+                        # if turn-on and steps==0a
                         # if expert_uc[1, i, 0] == 1 and observaion.steps_to_recover_gen[u] == 0:
                         if expert_uc[1, i, 0] == 1:
                             result['gen'][u, 1] = self.ppc['gen'][u, 8]

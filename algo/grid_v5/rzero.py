@@ -214,9 +214,9 @@ class Trainer:
         ent_action = distr.rsample()
         ent_action = ent_action.clip(-0.999, 0.999)
         if self.config.parameters['only_power']:
-            ent_log_prob = distr.log_prob(ent_action).sum(-1, keepdim=True)
+            ent_log_prob = distr.log_prob(ent_action).sum(-1)
         else:
-            ent_log_prob = distr.log_prob(ent_action)[:, :generator_num].sum(-1, keepdim=True)
+            ent_log_prob = distr.log_prob(ent_action)[:, :generator_num].sum(-1)
 
         entropy = -ent_log_prob
 
@@ -267,7 +267,7 @@ class Trainer:
         pass
 
     # @profile
-    def continuous_update_weights(self, batch_buffer, replay_buffer, target_workers, shared_storage):
+    def continuous_update_weights(self, batch_buffer, replay_buffer, target_workers, shared_storage, pre_buffer):
         writer = SummaryWriter(self.config.results_path)
 
         while ray.get(shared_storage.get_info.remote("num_played_games")) < 5: # previous 10
@@ -315,12 +315,13 @@ class Trainer:
                 continue
 
             if self.training_step % 20 == 0:
-                print("Training Step:{}; Batch Step:{}; P:{:.3f}, A_P:{:.3f}, V:{:.3f}, R:{:.3f}, C:{:.3f}, E:{:.3f}, I:{:.3f}, Time:{}, AMP={}, BatchQ={}".format(
+                print("Training Step:{}; Batch Step:{}; P:{:.3f}, A_P:{:.3f}, V:{:.3f}, R:{:.3f}, C:{:.3f}, E:{:.3f}, I:{:.3f}, Time:{}, AMP={}, BatchQ={}, Pre-Q={}".format(
                     self.training_step, batch_step, policy_loss, attacker_policy_loss, value_loss, reward_loss,
-                    consistency_loss, entropy_loss, imitation_loss, time.time() - x, self.config.use_amp, batch_buffer.get_len()
+                    consistency_loss, entropy_loss, imitation_loss, time.time() - x, self.config.use_amp, batch_buffer.get_len(), pre_buffer.get_len()
                 ))
                 # print(f'policy_loss_coeff={self.config.policy_loss_coeff}, entropy_loss_coeff={self.config.entropy_loss_coeff}')
-                print(f'target_policy = {batch[10][0][0]}')
+                print(f'attacker_flag={batch[-1][0][0]}, target_policy = {batch[10][0][0]}')
+                print(f'attacker_flag={batch[-1][0][1]}, target_policy = {batch[10][0][1]}')
                 # print(f'action_batch_max={np.max(np.abs(batch[2]))}')
 
             if self.training_step % self.config.target_update_interval == 0:
@@ -462,16 +463,16 @@ class Trainer:
                 writer.add_scalar("Worker/action_batch_min", np.min(batch[2]), self.training_step)
                 writer.add_scalar("Worker/action_batch_max", np.max(batch[2]), self.training_step)
 
-                line_overflow_mean = ray.get(shared_storage.get_info.remote("line_overflow_mean"))
-                renewable_consumption_mean = ray.get(shared_storage.get_info.remote("renewable_consumption_mean"))
-                running_cost_mean = ray.get(shared_storage.get_info.remote("running_cost_mean"))
-                bal_gen_mean = ray.get(shared_storage.get_info.remote("bal_gen_mean"))
-                reac_power_mean = ray.get(shared_storage.get_info.remote("reac_power_mean"))
-                writer.add_scalar("Training/line_overflow_reward", line_overflow_mean, self.training_step)
-                writer.add_scalar("Training/renewable_consumption_reward", renewable_consumption_mean, self.training_step)
-                writer.add_scalar("Training/running_cost_reward", running_cost_mean, self.training_step)
-                writer.add_scalar("Training/balanced_power_reward", bal_gen_mean, self.training_step)
-                writer.add_scalar("Training/reactive_power_reward", reac_power_mean, self.training_step)
+                # line_overflow_mean = ray.get(shared_storage.get_info.remote("line_overflow_mean"))
+                # renewable_consumption_mean = ray.get(shared_storage.get_info.remote("renewable_consumption_mean"))
+                # running_cost_mean = ray.get(shared_storage.get_info.remote("running_cost_mean"))
+                # bal_gen_mean = ray.get(shared_storage.get_info.remote("bal_gen_mean"))
+                # reac_power_mean = ray.get(shared_storage.get_info.remote("reac_power_mean"))
+                # writer.add_scalar("Training/line_overflow_reward", line_overflow_mean, self.training_step)
+                # writer.add_scalar("Training/renewable_consumption_reward", renewable_consumption_mean, self.training_step)
+                # writer.add_scalar("Training/running_cost_reward", running_cost_mean, self.training_step)
+                # writer.add_scalar("Training/balanced_power_reward", bal_gen_mean, self.training_step)
+                # writer.add_scalar("Training/reactive_power_reward", reac_power_mean, self.training_step)
 
     def update_lr(self):
         """
@@ -554,7 +555,7 @@ class Trainer:
         batch_size = observation_batch.shape[0]
 
         value, reward, policy_info, policy_info_attacker, hidden_state = self.model.initial_inference(
-            observation_batch, attacker_flag_batch[:, 0])
+            observation_batch)
 
         if self.config.efficient_imitation:
             policy_mcts, expert_policy = torch.chunk(policy_info, 2, dim=-1)
@@ -566,7 +567,7 @@ class Trainer:
             attacker_policy_loss_0 = self.loss_attacker_pi(policy_info_attacker[:batch_size//2],
                                                            raw_attacker_action_batch[0][:batch_size//2],
                                                            raw_policy_batch[0][:batch_size//2],
-                                                           attacker_flag_batch[:batch_size//2, 0]) #if self.config.add_attacker else torch.zeros_like(policy_loss_0)
+                                                           attacker_flag_batch[:batch_size//2, 0])  # if self.config.add_attacker else torch.zeros_like(policy_loss_0)
             imitation_loss_0 = self.loss_imitation(
                 expert_policy[batch_size // 2:],
                 action_batch[batch_size // 2:, 1],

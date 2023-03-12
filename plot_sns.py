@@ -6,14 +6,78 @@ import seaborn as sns
 import math
 from utilize.settings import settings
 import copy
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch, Circle
 sns.set()
 
 colors = ['sienna', 'darkgrey', 'lightpink', 'red', 'royalblue']
 
 # plt.rcParams['axes.facecolor'] = 'white'
 plt.rcdefaults()
-plt.rcParams['xtick.labelsize'] = 11
-plt.rcParams['ytick.labelsize'] = 11
+plt.rcParams['xtick.labelsize'] = 13
+plt.rcParams['ytick.labelsize'] = 13
+
+# Fixing random state for reproducibility
+np.random.seed(20220105)
+
+fig = plt.figure()
+ax = fig.add_subplot(projection='3d')
+
+ens = ['DAS-TFR', 'DAS-ECS', 'DAS-PHS', 'RTS-GridZero*']
+Colors = ['r', 'g', 'b', 'y']
+stas = [
+    # ' ',
+    '10%/30%', '20%/60%',
+    # '  '
+]
+weight = {
+          '10%/30%': np.array([29.9, 257.2, 155.1, 5]),
+          '20%/60%': np.array([60.1, 514.7, 309.7, 5]),
+}
+_x = np.arange(len(ens))
+_y = np.arange(len(stas))
+_xx, _yy = np.meshgrid(_x, _y)
+width = depth = 0.5
+for ith, ista in enumerate(stas):
+    x = _xx[ith]
+    y = _yy[ith]
+    top = []
+    for i in range(len(ens)):
+        top.append(weight[ista][i])
+    bottom = np.zeros_like(top)
+    cs = [Colors[ith]] * len(x)
+    ax.bar3d(x, y, bottom, width, depth, top, alpha=0.8, color=cs)
+
+ax.set_xlabel('Type', fontsize=15, labelpad=15)
+ax.set_ylabel('Retrofit level / Renewable penetration', fontsize=15, labelpad=20)
+ax.set_zlabel('Cost (Million $)', fontsize=15, labelpad=15)
+
+ax.set_xticks([0, 1, 2, 3])
+ax.set_xticklabels(ens)
+ax.set_ylim(0, 2)
+ax.set_yticks([0.5, 1.5])
+ax.set_yticklabels(stas)
+plt.show()
+
+
+# for ith, ista in enumerate(stas):
+#     xs = np.arange(len(ens))
+#     ys = weight[ista]
+#
+#     cs = [colors[ith]] * len(xs)
+#     # Plot the bar graph given by xs and ys on the plane y=k with 80% opacity.
+#     ax.bar(xs, ys, zs=ith+0.5, zdir='y', color=cs, alpha=0.8)
+#
+# ax.set_xlabel('Type', fontsize=15, labelpad=15)
+# ax.set_ylabel('Retrofit level / Renewable penetration', fontsize=15, labelpad=15)
+# ax.set_zlabel('Cost (Million $)', fontsize=15, labelpad=15)
+#
+# ax.set_xticks([0, 1, 2, 3])
+# ax.set_xticklabels(ens)
+# ax.set_ylim(0, 2)
+# ax.set_yticks([0.5, 1.5])
+# ax.set_yticklabels(stas)
+# plt.show()
 
 
 percentage = 0.4
@@ -73,27 +137,21 @@ g_data = g_data[:, :-1].astype(np.float32)
 
 data1 = pd.read_csv(f'./results/gridsim_v2/selected_episodes/2/data_53569.csv').values
 steps = np.asarray([i for i in range(288)])
+
 axs[0, 0].plot(steps, data1[:, 0], color='darkorange', label='Load consumption')
-# plt.fill_between(steps, g_data[:110, -2], g_data[:110, -1], alpha=0.3, label='GridZero adjust capacity area')
 axs[0, 0].plot(steps, data1[:, 2], color='mediumseagreen', label='Ground-truth renewable maximum')
-axs[0, 0].fill_between(steps_1, data[:, 2], data[:, 1], color='mediumseagreen', alpha=0.3, label='Abandoned renewable power')
-axs[0, 0].plot(steps, max_gen[settings.renewable_ids, :].sum(0), color=colors[2], linestyle='dotted',
+axs[0, 0].fill_between(steps_1, data[:, 2], data[:, 1], color='mediumseagreen', alpha=0.3, label='Renewable curtailment')
+axs[0, 0].plot(steps, max_gen[settings.renewable_ids, :].sum(0), color=colors[4], linestyle='dotted',
          label='Renewable prediction with +30% errors')
 
-# plt.plot(steps_1, max_gen_p, label='Max power', color='red')
-# plt.plot(steps_1, min_gen_p, label='Min power without renewable abortion', color='blue')
-axs[0, 0].fill_between(steps_1, max_gen_p, min_gen_p, color=colors[2], alpha=0.3, label='UC adjust capacity area')
-axs[0, 0].plot(steps_1, data[:, 1], label='ED consumption', color=colors[2], linestyle='dashdot')
-axs[0, 0].set_title(f'(A1) DAS: renewable day-ahead overestimated',
-                        # fontsize='small'
-                        )
-# im = axs[1, 0].imshow(gen_status_over[:, settings.thermal_ids].swapaxes(0, 1), cmap=matplotlib.colormaps['YlOrRd'])
-# plt.colorbar(im, ax=axs[1, 0])
-# axs[1, 0].plot(steps_1, gen_status_over.sum(1), color=colors[2])
-# axs[0].set_xlabel('Steps', fontsize=20)
-# plt.ylabel('Power', fontsize=20)
-# axs[0].legend(loc='lower right', fontsize=15)
-# plt.show()
+axs[0, 0].fill_between(steps_1, max_gen_p, min_gen_p, color=colors[4], alpha=0.3, label='UC adjust capacity area')
+axs[0, 0].plot(steps_1, data[:, 1], label='Renewable integration', color=colors[4], linestyle='dashdot')
+axs[0, 0].set_title(f'(A1) DAS: renewable day-ahead overestimated',)
+
+# axs[0, 1].imread('./figs/active_power/DAS_53569_84.png')
+# axs[0, 1].imshow()
+# axs[0, 2].imread('./figs/active_power/DAS_53569_85.png')
+# axs[0, 2].imshow()
 
 
 # TODO: check errors
@@ -104,38 +162,21 @@ data = data[:, :-1].astype(np.float32)
 steps_1 = np.array([i for i in range(data.shape[0])])
 max_gen_p = data[:, 6]
 min_gen_p = data[:, 7]
-
 data1 = pd.read_csv(f'./results/gridsim_v2/selected_episodes/2/data_53569.csv').values
 steps = np.asarray([i for i in range(nb_periods)])
 
-axs[0, 1].plot(steps, data1[:, 0], color='darkorange',
-            # label='Load consumption'
-            )
-
-axs[0, 1].plot(steps, ori_max_gen[settings.renewable_ids].sum(0), color=colors[0], linestyle='dotted',
+axs[0, 1].plot(steps, data1[:, 0], color='darkorange',)
+axs[0, 1].plot(steps, ori_max_gen[settings.renewable_ids].sum(0), color=colors[4], linestyle='dotted',
          label='Renewable prediction with -30% errors')
-# axs[0, 1].plot(steps, data[:, 5], color=colors[0], linestyle='dotted', label='Renewable prediction with -30% errors')
-axs[0, 1].plot(steps, data1[:, 2], color='mediumseagreen',
-            # label='Ground-truth renewable maximum'
-            )
+axs[0, 1].plot(steps, data1[:, 2], color='mediumseagreen',)
 
-axs[0, 1].fill_between(steps_1, max_gen_p, min_gen_p, color=colors[0], alpha=0.3, label='Adjust capacity area')
+axs[0, 1].fill_between(steps_1, max_gen_p, min_gen_p, color=colors[4], alpha=0.3, label='Adjust capacity area')
 axs[0, 1].fill_between(steps_1, data1[:, 2], data[:, 1], color='mediumseagreen', alpha=0.3)
-axs[0, 1].plot(steps_1, data[:, 1], label='ED consumption', color=colors[0], linestyle='dashdot')
-axs[0, 1].set_title(f'(A2) DAS: renewable day-ahead underestimated',
-                        # fontsize='small'
-                        )
-# im = axs[1, 1].imshow(gen_status_under[:, settings.thermal_ids].swapaxes(0, 1), cmap=matplotlib.colormaps['Reds'])
-# plt.colorbar(im, ax=axs[1, 1])
-# axs[1, 1].plot(steps_1, gen_status_under.sum(1), color=colors[0])
-# axs[1].set_xlabel('Steps', fontsize=20)
-# plt.ylabel('Power', fontsize=20)
-# axs[1].legend(loc='lower right', fontsize=15)
-# plt.show()
+axs[0, 1].plot(steps_1, data[:, 1], color=colors[4], linestyle='dashdot')
+axs[0, 1].set_title(f'(A2) DAS: renewable day-ahead underestimated',)
 
 
 steps = np.asarray([i for i in range(nb_periods)])
-# plt.subplot(1, 3, 3)
 axs[1, 1].plot(steps, g_data[:, 0], color='darkorange',
             # label='Load consumption'
             )
@@ -143,32 +184,30 @@ axs[1, 1].plot(steps, g_data[:, 0], color='darkorange',
 axs[1, 1].plot(steps, g_data[:, 2], color='mediumseagreen',
             # label='Ground-truth renewable maximum'
             )
-
 axs[1, 1].fill_between(steps, g_data[:, 5], g_data[:, 6], color=colors[4], alpha=0.3, label='GridZero adjust capacity area')
 axs[1, 1].fill_between(steps, g_data[:, 2], g_data[:, 1], color='mediumseagreen', alpha=0.3)
 axs[1, 1].plot(steps, g_data[:, 1], color=colors[4], linestyle='dashdot', label='GridZero consumption')
-axs[1, 1].set_title(f'(C) RTS-GridZero: renewable nowcasting',
-                        # fontsize='small'
-                        )
-# im = axs[3, 0].imshow(gen_status_gridzero[:, settings.thermal_ids].swapaxes(0, 1), cmap=matplotlib.colormaps['Blues'])
-# plt.colorbar(im, ax=axs[3, 0])
-# axs[3, 0].plot(steps, gen_status_gridzero.sum(1), color=colors[4])
+axs[1, 1].set_title(f'(C) RTS-GridZero: renewable nowcasting')
+
+# axs[1, 1].imread('./figs/active_power/DAS_53569_84.png')
+# axs[1, 1].imshow()
+# axs[1, 2].imread('./figs/active_power/DAS_53569_85.png')
+# axs[1, 2].imshow()
 
 sac_data = pd.read_csv('data_53569_sac.csv').values
 gen_status = np.array(sac_data[:, -1])
 sac_data = sac_data[:, :-1].astype(np.float32)
 gen_status_sac = np.array([[float(i) for i in gen_status[j][1:-1].split(',')] for j in range(sac_data.shape[0])])
 axs[1, 0].plot(steps, sac_data[:, 0], color='darkorange',
-            # label='Load consumption'
             )
 
 axs[1, 0].plot(steps, sac_data[:, 2], color='mediumseagreen',
             # label='Ground-truth renewable maximum'
             )
 
-axs[1, 0].fill_between(steps, sac_data[:, 5], sac_data[:, 6], color=colors[1], alpha=0.3, label='SAC adjust capacity area')
+axs[1, 0].fill_between(steps, sac_data[:, 5], sac_data[:, 6], color=colors[4], alpha=0.3, label='SAC adjust capacity area')
 axs[1, 0].fill_between(steps, sac_data[:, 2], sac_data[:, 1], color='mediumseagreen', alpha=0.3)
-axs[1, 0].plot(steps, sac_data[:, 1], color=colors[1], linestyle='dashdot', label='SAC consumption')
+axs[1, 0].plot(steps, sac_data[:, 1], color=colors[4], linestyle='dashdot')
 axs[1, 0].set_title(f'(B) RTS-SAC: renewable nowcasting',
                         # fontsize='small'
                         )
@@ -190,6 +229,211 @@ fig.legend(
 plt.show()
 
 
+fig, axs = plt.subplots(2, 3, sharey=False, sharex=False, constrained_layout=True)
+position = 0.0
+data = pd.read_csv(f'./new_data_53569_+0.3_1.csv').values
+gen_status = np.array(data[:, -1])
+gen_status_over = np.array([[float(i) for i in gen_status[j][1:-1].split(' ')] for j in range(data.shape[0])])
+# gen_status_over = np.concatenate((gen_status_over, np.zeros((288 - gen_status_over.shape[0], gen_status_over.shape[1]))), axis=0)
+data = data[:, :-1].astype(np.float32)
+steps_1 = np.array([i for i in range(data.shape[0])])
+max_gen_p = data[:, -2] - 50
+min_gen_p = data[:, -1]
+
+g_data = pd.read_csv(f'./data_53569.csv').values
+gen_status = np.array(g_data[:, -1])
+gen_status_gridzero = np.array([[float(i) for i in gen_status[j][1:-1].split(',')] for j in range(g_data.shape[0])])
+g_data = g_data[:, :-1].astype(np.float32)
+
+data1 = pd.read_csv(f'./results/gridsim_v2/selected_episodes/2/data_53569.csv').values
+steps = np.asarray([i for i in range(288)])
+
+axs[0, 0].plot(steps, data1[:, 0], color='darkorange', label='Load consumption')
+axs[0, 0].plot(steps, data1[:, 2], color='mediumseagreen', label='Real renewable maximum')
+axs[0, 0].fill_between(steps_1, data[:, 2], data[:, 1], color='mediumseagreen', alpha=0.3, label='Renewable curtailment')
+axs[0, 0].plot(steps, max_gen[settings.renewable_ids, :].sum(0), color=colors[4], linestyle='dotted',
+         label='Renewable overestimation')
+
+axs[0, 0].fill_between(steps_1, max_gen_p, min_gen_p, color=colors[4], alpha=0.3, label='Adjust capacity area')
+axs[0, 0].plot(steps_1, data[:, 1], label='Renewable consumption', color=colors[4], linestyle='dashdot')
+axs[0, 0].set_title(f'(A1) DAS: renewable day-ahead overestimated', fontsize=15
+                    # y=position
+                    )
+# axs[0, 0].set_ylabel('Power', fontsize=18)
+
+img = plt.imread('./figs/active_power/DAS_53569_84_cut.png')
+axs[0, 1].imshow(img)
+axs[0, 1].axis('off')
+axs[0, 1].set_title(f'(A2) DAS operational snapshot', fontsize=15
+                    # y=position
+                    )
+
+img = plt.imread('./figs/active_power/DAS_53569_85_cut.png')
+axs[0, 2].imshow(img)
+axs[0, 2].axis('off')
+axs[0, 2].set_title(f'(A3) DAS snapshot (no thermal unit restarts)', fontsize=15
+                    # y=position
+                    )
+
+steps = np.asarray([i for i in range(nb_periods)])
+axs[1, 0].plot(steps, g_data[:, 0], color='darkorange')
+
+axs[1, 0].plot(steps, g_data[:, 2], color='mediumseagreen')
+axs[1, 0].fill_between(steps, g_data[:, 5], g_data[:, 6], color=colors[4], alpha=0.3)
+axs[1, 0].fill_between(steps, g_data[:, 2], g_data[:, 1], color='mediumseagreen', alpha=0.3)
+axs[1, 0].plot(steps, g_data[:, 1], color=colors[4], linestyle='dashdot')
+axs[1, 0].set_title(f'(B1) RTS-GridZero: renewable nowcasting', fontsize=15
+                    # y=position
+                    )
+# axs[1, 0].set_ylabel('Power', fontsize=18)
+axs[1, 0].set_xlabel('Steps', fontsize=18)
+
+img = plt.imread('./figs/active_power/GridZero_53569_84_cut.png')
+axs[1, 1].imshow(img)
+axs[1, 1].axis('off')
+axs[1, 1].set_title(f'(B2) RTS-GridZero operational snapshot', fontsize=15
+                    # y=position
+                    )
+
+img = plt.imread('./figs/active_power/GridZero_53569_85_cut.png')
+axs[1, 2].imshow(img)
+axs[1, 2].axis('off')
+axs[1, 2].set_title(f'(B3) RTS-GridZero snapshot (thermal unit restarts)', fontsize=15)
+fig.supylabel('Power', fontsize=18)
+# elements = [
+#             # Line2D([0], [0], marker='o', color='w', label='Thermal units',
+#             #               markerfacecolor='red', markersize=10),
+#             # Line2D([0], [0], marker='o', color='w', label='Renewable units',
+#             #        markerfacecolor='g', markersize=10),
+#             Line2D([0], [0], color='darkorange', label='Load consumption'),
+#             Line2D([0], [0], color='mediumseagreen', label='Real renewable capacity'),
+#             Line2D([0], [0], linestyle='dashdot', color=colors[4], label='Renewable intgration'),
+#             Line2D([0], [0], linestyle='dotted', color=colors[4], label='Renewable estimation'),
+#             Patch(facecolor=colors[4], edgecolor=colors[4], label='Adjust capacity area', alpha=0.3),
+#             Patch(facecolor='mediumseagreen', edgecolor='mediumseagreen', label='Renewable curtailment', alpha=0.3)
+#             ]
+# axs[1, 0].legend(
+#     handles=elements,
+#     #        bbox_to_anchor=(0.3, 0.05),
+#     #       fancybox=True, shadow=True,
+#     # ncol=5
+#     fontsize=10, loc='lower right', ncol=1
+# )
+# elements = [
+#     Line2D([0], [0], marker='o', color='w', label='Thermal units',
+#                   markerfacecolor='red', markersize=10),
+#     Line2D([0], [0], marker='o', color='w', label='Renewable units',
+#            markerfacecolor='g', markersize=10),
+#     # Line2D([0], [0], marker='o', color='w', linestyle='dotted', label='Critical difference',
+#     #        markerfacecolor='w', markeredgecolor='darkred', markersize=10),
+#     Circle((0, 0), radius=5, joinstyle='round', linestyle='dotted', capstyle='round', label='Critical difference', facecolor='w', edgecolor='darkred'),
+#     Line2D([0], [0], color='tan', label='Power flow'),
+# ]
+# axs[1, 2].legend(
+#     handles=elements,
+#     #        bbox_to_anchor=(0.3, 0.05),
+#     #       fancybox=True, shadow=True,
+#     # ncol=5
+#     fontsize=10, loc='lower right',
+#     ncol=3
+# )
+plt.show()
+
+
+
+
+fig, axs = plt.subplots(2, 3, constrained_layout=True)
+img = plt.imread('./figs/active_power/SAC_53569_175_cut.png')
+axs[0, 0].imshow(img)
+axs[0, 0].axis('off')
+axs[0, 0].set_title(f'(A1) RTS-SAC operational snapshot', fontsize=15)
+
+img = plt.imread('./figs/active_power/DAS_53569_175_cut.png')
+axs[0, 1].imshow(img)
+axs[0, 1].axis('off')
+axs[0, 1].set_title(f'(B1) DAS operational snapshot', fontsize=15)
+
+img = plt.imread('./figs/active_power/GridZero_53569_175_cut.png')
+axs[0, 2].imshow(img)
+axs[0, 2].axis('off')
+axs[0, 2].set_title(f'(C1) RTS-GridZero operational snapshot', fontsize=15)
+
+sac_data = pd.read_csv('data_53569_sac.csv').values
+gen_status = np.array(sac_data[:, -1])
+sac_data = sac_data[:, :-1].astype(np.float32)
+gen_status_sac = np.array([[float(i) for i in gen_status[j][1:-1].split(',')] for j in range(sac_data.shape[0])])
+axs[1, 0].plot(steps, sac_data[:, 0], color='darkorange')
+axs[1, 0].plot(steps, sac_data[:, 2], color='mediumseagreen')
+axs[1, 0].fill_between(steps, sac_data[:, 5], sac_data[:, 6], color=colors[4], alpha=0.3, label='SAC adjust capacity area')
+axs[1, 0].fill_between(steps, sac_data[:, 2], sac_data[:, 1], color='mediumseagreen', alpha=0.3)
+axs[1, 0].plot(steps, sac_data[:, 1], color=colors[4], linestyle='dashdot')
+axs[1, 0].set_ylabel('Power', fontsize=18)
+axs[1, 0].set_title(f'(A2) RTS-SAC: renewable nowcasting', fontsize=15)
+
+data = pd.read_csv(f'./new_data_53569_-0.5_2.csv').values
+gen_status = np.array(data[:, -1])
+gen_status_under = np.array([[float(i) for i in gen_status[j][1:-1].split(' ')] for j in range(data.shape[0])])
+data = data[:, :-1].astype(np.float32)
+steps_1 = np.array([i for i in range(data.shape[0])])
+max_gen_p = data[:, 6]
+min_gen_p = data[:, 7]
+data1 = pd.read_csv(f'./results/gridsim_v2/selected_episodes/2/data_53569.csv').values
+steps = np.asarray([i for i in range(nb_periods)])
+
+axs[1, 1].plot(steps, data1[:, 0], color='darkorange',)
+axs[1, 1].plot(steps, ori_max_gen[settings.renewable_ids].sum(0), color=colors[4], linestyle='dotted',
+         label='Renewable prediction with -30% errors')
+axs[1, 1].plot(steps, data1[:, 2], color='mediumseagreen')
+axs[1, 1].fill_between(steps_1, max_gen_p, min_gen_p, color=colors[4], alpha=0.3, label='Adjust capacity area')
+axs[1, 1].fill_between(steps_1, data1[:, 2], data[:, 1], color='mediumseagreen', alpha=0.3)
+axs[1, 1].plot(steps_1, data[:, 1], color=colors[4], linestyle='dashdot')
+axs[1, 1].set_title(f'(B2) DAS: renewable day-ahead underestimated', fontsize=15)
+
+steps = np.asarray([i for i in range(nb_periods)])
+axs[1, 2].plot(steps, g_data[:, 0], color='darkorange')
+axs[1, 2].plot(steps, g_data[:, 2], color='mediumseagreen')
+axs[1, 2].fill_between(steps, g_data[:, 5], g_data[:, 6], color=colors[4], alpha=0.3, label='GridZero adjust capacity area')
+axs[1, 2].fill_between(steps, g_data[:, 2], g_data[:, 1], color='mediumseagreen', alpha=0.3)
+axs[1, 2].plot(steps, g_data[:, 1], color=colors[4], linestyle='dashdot')
+axs[1, 2].set_title(f'(C2) RTS-GridZero: renewable nowcasting', fontsize=15)
+fig.supxlabel('Steps', fontsize=18)
+plt.show()
+
+
+
+fig, axs = plt.subplots(2, 3, constrained_layout=True)
+img = plt.imread('./figs/line_loading/SAC_53569_33_cut.png')
+axs[0, 0].imshow(img)
+axs[0, 0].axis('off')
+axs[0, 0].set_title(f'(A1) RTS-SAC operational snapshot', fontsize=15)
+
+img = plt.imread('./figs/line_loading/DAS_53569_33_cut.png')
+axs[0, 1].imshow(img)
+axs[0, 1].axis('off')
+axs[0, 1].set_title(f'(A2) DAS operational snapshot', fontsize=15)
+
+img = plt.imread('./figs/line_loading/GridZero_53569_33_cut.png')
+axs[0, 2].imshow(img)
+axs[0, 2].axis('off')
+axs[0, 2].set_title(f'(A3) RTS-GridZero operational snapshot', fontsize=15)
+
+img = plt.imread('./figs/reactive_power/SAC_53569_23_cut.png')
+axs[1, 0].imshow(img)
+axs[1, 0].axis('off')
+axs[1, 0].set_title(f'(B1) RTS-SAC operational snapshot', fontsize=15)
+
+img = plt.imread('./figs/reactive_power/DAS_53569_23_cut.png')
+axs[1, 1].imshow(img)
+axs[1, 1].axis('off')
+axs[1, 1].set_title(f'(B2) DAS operational snapshot', fontsize=15)
+
+img = plt.imread('./figs/reactive_power/GridZero_53569_23_cut.png')
+axs[1, 2].imshow(img)
+axs[1, 2].axis('off')
+axs[1, 2].set_title(f'(B3) RTS-GridZero operational snapshot', fontsize=15)
+plt.show()
+
+
 # reduce flexibility retrofit fee
 g_data = pd.read_csv(f'./data_53569.csv').values
 # gen_status = np.array(g_data[:, -1])
@@ -208,42 +452,42 @@ data_min30 = pd.read_csv(f'./new_data_53569_-0.5_min0.3.csv').values
 # gen_status_gridzero = np.array([[float(i) for i in gen_status[j][1:-1].split(',')] for j in range(g_data.shape[0])])
 data_min30 = data_min30[:, :-1].astype(np.float32)
 
-fig, axs = plt.subplots(2, 2, sharey=True, sharex=True, constrained_layout=False, figsize=(8, 4))
+fig, axs = plt.subplots(2, 2, sharey=True, sharex=True, constrained_layout=True, figsize=(8, 4))
 axs[0, 0].plot(steps, data_min50[:, 0], color='darkorange',
             label='Load consumption'
             )
-axs[0, 0].plot(steps, ori_max_gen[settings.renewable_ids].sum(0), color=colors[0], linestyle='dotted',
-         label='Renewable prediction with -30% errors')
+axs[0, 0].plot(steps, ori_max_gen[settings.renewable_ids].sum(0), color=colors[4], linestyle='dotted',
+         label='Renewable forecasts')
 # axs[0, 1].plot(steps, data[:, 5], color=colors[0], linestyle='dotted', label='Renewable prediction with -30% errors')
 axs[0, 0].plot(steps, data_min50[:, 2], color='mediumseagreen',
-            label='Ground-truth renewable maximum'
+            label='Real renewable capacity'
             )
-axs[0, 0].fill_between(steps_1, data_min50[:, 6], data_min50[:, 7], color=colors[0], alpha=0.3, label='Adjust capacity area')
-axs[0, 0].fill_between(steps_1, data_min50[:, 2], data_min50[:, 1], color='mediumseagreen', alpha=0.3, label='Abandoned renewable power')
-axs[0, 0].plot(steps_1, data_min50[:, 1], label='ED consumption', color=colors[0], linestyle='dashdot')
+axs[0, 0].fill_between(steps_1, data_min50[:, 6], data_min50[:, 7], color=colors[4], alpha=0.3, label='Adjust capacity area')
+axs[0, 0].fill_between(steps_1, data_min50[:, 2], data_min50[:, 1], color='mediumseagreen', alpha=0.3, label='Renewable curtailment')
+axs[0, 0].plot(steps_1, data_min50[:, 1], label='Renewable integration', color=colors[4], linestyle='dashdot')
 axs[0, 0].set_title(r'(A1) DAS: $P_{min} = 0.5P_{max}$')
 
 axs[0, 1].plot(steps, data_min40[:, 0], color='darkorange'
             )
-axs[0, 1].plot(steps, ori_max_gen[settings.renewable_ids].sum(0), color=colors[0], linestyle='dotted')
+axs[0, 1].plot(steps, ori_max_gen[settings.renewable_ids].sum(0), color=colors[4], linestyle='dotted')
 # axs[0, 1].plot(steps, data[:, 5], color=colors[0], linestyle='dotted', label='Renewable prediction with -30% errors')
 axs[0, 1].plot(steps, data_min40[:, 2], color='mediumseagreen',
             )
-axs[0, 1].fill_between(steps_1, data_min40[:, 6], data_min40[:, 7], color=colors[0], alpha=0.3)
+axs[0, 1].fill_between(steps_1, data_min40[:, 6], data_min40[:, 7], color=colors[4], alpha=0.3)
 axs[0, 1].fill_between(steps_1, data_min40[:, 2], data_min40[:, 1], color='mediumseagreen', alpha=0.3)
-axs[0, 1].plot(steps_1, data_min40[:, 1], color=colors[0], linestyle='dashdot')
+axs[0, 1].plot(steps_1, data_min40[:, 1], color=colors[4], linestyle='dashdot')
 axs[0, 1].set_title(r'(A2) DAS: $P_{min} = 0.4P_{max}$')
 
 axs[1, 0].plot(steps, data_min30[:, 0], color='darkorange',
             )
-axs[1, 0].plot(steps, ori_max_gen[settings.renewable_ids].sum(0), color=colors[0], linestyle='dotted',
+axs[1, 0].plot(steps, ori_max_gen[settings.renewable_ids].sum(0), color=colors[4], linestyle='dotted',
          )
 # axs[1, 0].plot(steps, data[:, 5], color=colors[0], linestyle='dotted', label='Renewable prediction with -30% errors')
 axs[1, 0].plot(steps, data_min30[:, 2], color='mediumseagreen'
             )
-axs[1, 0].fill_between(steps_1, data_min30[:, 6], data_min30[:, 7], color=colors[0], alpha=0.3)
+axs[1, 0].fill_between(steps_1, data_min30[:, 6], data_min30[:, 7], color=colors[4], alpha=0.3)
 axs[1, 0].fill_between(steps_1, data_min30[:, 2], data_min30[:, 1], color='mediumseagreen', alpha=0.3)
-axs[1, 0].plot(steps_1, data_min30[:, 1], color=colors[0], linestyle='dashdot')
+axs[1, 0].plot(steps_1, data_min30[:, 1], color=colors[4], linestyle='dashdot')
 axs[1, 0].set_title(r'(A3) DAS: $P_{min} = 0.3P_{max}$')
 
 axs[1, 1].plot(steps, g_data[:, 0], color='darkorange'
@@ -251,20 +495,20 @@ axs[1, 1].plot(steps, g_data[:, 0], color='darkorange'
 # axs[1, 0].plot(steps, data[:, 5], color=colors[0], linestyle='dotted', label='Renewable prediction with -30% errors')
 axs[1, 1].plot(steps, g_data[:, 2], color='mediumseagreen'
             )
-axs[1, 1].fill_between(steps_1, g_data[:, 5], g_data[:, 6], color=colors[4], alpha=0.3, label='Adjust capacity area')
+axs[1, 1].fill_between(steps_1, g_data[:, 5], g_data[:, 6], color=colors[4], alpha=0.3)
 axs[1, 1].fill_between(steps_1, g_data[:, 2], g_data[:, 1], color='mediumseagreen', alpha=0.3)
-axs[1, 1].plot(steps_1, g_data[:, 1], label='GridZero consumption', color=colors[4], linestyle='dashdot')
+axs[1, 1].plot(steps_1, g_data[:, 1], color=colors[4], linestyle='dashdot')
 axs[1, 1].set_title(r'(B) RTS-GridZero: $P_{min}=0.5P_{max}$')
-fig.supxlabel('Steps', fontsize=20)
-fig.supylabel('Power', fontsize=20)
+fig.supxlabel('Steps', fontsize=18)
+fig.supylabel('Power', fontsize=18)
 # fig.legend(loc='lower right', fontsize=12)
-fig.legend(
-    loc='upper center',
-    fontsize=12,
-           bbox_to_anchor=(0.5, 1.0),
-          fancybox=True, shadow=True,
-    ncol=5
-)
+# fig.legend(
+#     loc='upper center',
+#     fontsize=12,
+#            bbox_to_anchor=(0.5, 1.0),
+#           fancybox=True, shadow=True,
+#     ncol=5
+# )
 plt.show()
 
 
@@ -535,9 +779,9 @@ for epi in range(20):
     # ddpg_data = pd.read_csv(f'./results/gridsim_v2/ddpg_log/data_{start_sample_idx[epi]}.csv').values
     # sac_data = pd.read_csv(f'./results/gridsim_v2/sac_log/data_{start_sample_idx[epi]}.csv').values
     steps = np.asarray([i for i in range(288)])
-    axs[row, col].plot(steps, data[:, 0], color='darkorange', label='Load' if row == 0 and col == 0 else None)
+    axs[row, col].plot(steps, data[:, 0], color='darkorange', label='Load consumption' if row == 0 and col == 0 else None)
     axs[row, col].plot(steps, data[:, 1], color=colors[4], linestyle='dashdot',
-                       label='GridZero consumption' if row == 0 and col == 0 else None)
+                       label='GridZero integration' if row == 0 and col == 0 else None)
     # axs[row, col].plot(steps, ac_data[:, 1], color=colors[3], linestyle='dashed',
     #                    label='UC-ED consumption' if row == 0 and col == 0 else None)
     # try:
@@ -556,15 +800,15 @@ for epi in range(20):
     axs[row, col].fill_between(steps, data[:, 5], data[:, 6], color=colors[4], alpha=0.3,
                            label='Adjust capacity area' if row == 0 and col == 0 else None)
     axs[row, col].fill_between(steps, data[:, 2], data[:, 1], color='mediumseagreen', alpha=0.3,
-                           label='Abandoned renewable power' if row == 0 and col == 0 else None)
+                           label='Renewable curtailment' if row == 0 and col == 0 else None)
     axs[row, col].plot(steps, data[:, 2], color='mediumseagreen',
-                       label='Renewable maximum' if row == 0 and col == 0 else None)
+                       label='Real renewable capacity' if row == 0 and col == 0 else None)
     axs[row, col].set_title(f'start_idx={start_sample_idx[epi]}',
                             fontsize=12
                             )
 
-fig.supxlabel('Steps', fontsize=20)
-fig.supylabel('Power', fontsize=20)
+fig.supxlabel('Steps', fontsize=18)
+fig.supylabel('Power', fontsize=18)
 fig.legend(loc='upper right')
 # fig.legend(bbox_to_anchor=(0.5, 1.1), loc=9, borderaxespad=0, ncol=5)
 plt.show()
@@ -638,6 +882,5 @@ plt.ylabel("Scores", fontsize=15)
 plt.legend(loc='lower right')
 # plt.grid()
 plt.show()
-
 
 

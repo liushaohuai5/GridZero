@@ -12,7 +12,7 @@ from algo.grid_v5.model import MLPModel
 from algo.grid_v5.rzero import Trainer
 from algo.grid_v5.replay_buffer import LowDimFastReplayBuffer
 from algo.grid_v5.self_play import LowDimTestWorker, SelfPlay, ExpertPlay
-from algo.grid_v5.batch_worker import LowDimFastBatchTargetWorker, BatchBufferFast
+from algo.grid_v5.batch_worker import LowDimFastBatchTargetWorker, BatchBufferFast, BatchWorker_CPU
 
 import shared_storage
 
@@ -32,7 +32,7 @@ class RZero:
         print('Start to init ray.')
         ray.init(num_gpus=config.num_gpus,
                  num_cpus=config.total_cpus,
-                 object_store_memory=280 * 1024 * 1024 * 1024,
+                 object_store_memory=200 * 1024 * 1024 * 1024,
                  ignore_reinit_error=True,
                  # log_to_driver=False
                  )
@@ -111,10 +111,19 @@ class RZero:
 
         # Worker: Batch Buffer
         self.batch_buffer_worker = BatchBufferFast(size=20, threshold=15)
+        self.pre_buffer = BatchBufferFast(size=20, threshold=15)
+
+        self.cpu_batchworkers = [
+            BatchWorker_CPU.remote(
+                idx, self.pre_buffer, self.replay_buffer_worker, self.shared_storage, self.config
+            ) for idx in range(self.config.cpu_workers_num)
+        ]
 
         self.batch_workers = [
             LowDimFastBatchTargetWorker.remote(
-                idx, self.checkpoint, self.batch_buffer_worker, self.replay_buffer_worker,
+                idx, self.checkpoint, self.batch_buffer_worker,
+                # self.replay_buffer_worker,
+                self.pre_buffer,
                 self.shared_storage, self.config
             )
             for idx in range(self.config.batch_worker_num)
@@ -156,6 +165,11 @@ class RZero:
             ]
 
         [
+            cpu_worker.spin.remote()
+            for cpu_worker in self.cpu_batchworkers
+        ]
+
+        [
             batch_worker.spin.remote()
             for batch_worker in self.batch_workers
         ]
@@ -166,7 +180,7 @@ class RZero:
 
         # if log_in_tensorboard:
         self.training_worker.continuous_update_weights(
-            self.batch_buffer_worker, self.replay_buffer_worker, self.batch_workers, self.shared_storage
+            self.batch_buffer_worker, self.replay_buffer_worker, self.batch_workers, self.shared_storage, self.pre_buffer
         )
 
     def terminate_workers(self):

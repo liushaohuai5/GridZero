@@ -118,8 +118,8 @@ class LowDimFastReplayBuffer(object):
     def save_game(self, game_history):
 
         if self.config.norm_type == 'mean_std':
-            # ori_states = ray.get(game_history.origin_state_history)
-            ori_states = game_history.origin_state_history
+            ori_states = ray.get(game_history.origin_state_history)
+            # ori_states = game_history.origin_state_history
             if len(self.observations) < 4 * 1e3 * self.config.replay_buffer_size:
                 for i in range(ori_states.shape[0]):
                     self.observations.append(ori_states[i])
@@ -313,6 +313,19 @@ class LowDimFastReplayBuffer(object):
         game_id = self.num_played_games - len(self.buffer) + game_index
 
         return game_id, self.buffer[game_id], game_prob
+
+    def sample_n_games_wrapper(self, n_games, force_uniform=False, rank=0):
+        # if rank == 0:
+        #     from line_profiler import LineProfiler
+        #     lp = LineProfiler()
+        #     lp_wrapper = lp(self.sample_n_games)
+        #     ret = lp_wrapper(n_games, force_uniform=force_uniform)
+        #     lp.print_stats()
+        # else:
+        ret = self.sample_n_games(n_games, force_uniform=False)
+
+        return ret
+
 
     # @profile
     def sample_n_games(self, n_games, force_uniform=False):

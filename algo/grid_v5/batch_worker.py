@@ -54,6 +54,39 @@ def calculate_mean_std(val, visit):
 
     return val_mean_result, val_dev_mean
 
+@ray.remote(num_cpus=0.5)
+class BatchWorker_CPU:
+    def __init__(self, rank, pre_buffer, replay_buffer, shared_storage, config):
+        self.rank = rank
+        self.config = config
+        self.pre_buffer = pre_buffer
+        self.replay_buffer = replay_buffer
+        self.shared_storage = shared_storage
+
+    def prepare_batch_context(self):
+        game_samples = ray.get(
+            self.replay_buffer.sample_n_games_wrapper.remote(self.config.batch_size, force_uniform=False,
+                                                             rank=self.rank))
+        self.pre_buffer.push([game_samples])
+
+    def spin(self):
+        while ray.get(self.shared_storage.get_info.remote("num_played_games")) < 5:
+            time.sleep(1)
+
+        if self.config.efficient_imitation:
+            while ray.get(self.shared_storage.get_info.remote("num_expert_games")) < 1:
+                time.sleep(1)
+
+        print("start making pre-batches...")
+
+        while True:
+            try:
+                # x = time.time()
+                self.prepare_batch_context()
+                # print(f'pre time={time.time()-x:.3f}')
+            except:
+                pass
+
 
 # @ray.remote(num_gpus=0.08)
 @ray.remote(num_gpus=0.12)
@@ -62,11 +95,15 @@ class LowDimFastBatchTargetWorker:
     Class which run in a dedicated thread to calculate the mini-batch for training
     """
 
-    def __init__(self, rank, initial_checkpoint, batch_buffer, replay_buffer, shared_storage, config):
+    def __init__(self, rank, initial_checkpoint, batch_buffer,
+                 # replay_buffer,
+                 pre_buffer,
+                 shared_storage, config):
         self.rank = rank
         self.config = config
         self.batch_buffer = batch_buffer
-        self.replay_buffer = replay_buffer
+        # self.replay_buffer = replay_buffer
+        self.pre_buffer = pre_buffer
         self.shared_storage = shared_storage
         self.buffer = []
         self.model = MLPModel(config)
@@ -140,17 +177,26 @@ class LowDimFastBatchTargetWorker:
 
             training_step = ray.get(self.shared_storage.get_info.remote("training_step"))
             target_update_index = training_step // self.config.target_update_interval
-            # x = time.time()
-            if target_update_index > self.last_target_update_index:
-                self.last_target_update_index = target_update_index
-                target_weights = ray.get(self.shared_storage.get_info.remote("target_weights"))
-                self.model.set_weights(target_weights)
-                self.model.to('cuda')
-                self.model.eval()
-                print("batch worker model updated !!!")
             try:
-                batch = self.get_batch(train_steps=training_step)
-                self.batch_buffer.push([batch])
+                # x = time.time()
+                if target_update_index > self.last_target_update_index:
+                    self.last_target_update_index = target_update_index
+                    target_weights = ray.get(self.shared_storage.get_info.remote("target_weights"))
+                    self.model.set_weights(target_weights)
+                    self.model.to('cuda')
+                    self.model.eval()
+                    print("batch worker model updated !!!")
+
+                if self.rank == 0:
+                    from line_profiler import LineProfiler
+                    lp = LineProfiler()
+                    lp_wrapper = lp(self.get_batch)
+                    batch = lp_wrapper()
+                    lp.print_stats()
+                else:
+                    batch = self.get_batch(train_steps=training_step)
+                if batch is not None:
+                    self.batch_buffer.push([batch])
             except:
                 continue
                 # print(f'batchQ={self.batch_buffer.get_len()}')
@@ -192,7 +238,12 @@ class LowDimFastBatchTargetWorker:
              )
 
         weight_batch = [] if self.config.PER else None
-        game_samples = ray.get(self.replay_buffer.sample_n_games.remote(self.config.batch_size, force_uniform=False))
+        # game_samples = ray.get(self.replay_buffer.sample_n_games_wrapper.remote(self.config.batch_size, force_uniform=False, rank=self.rank))
+        game_samples = self.pre_buffer.pop()
+        if game_samples is None:
+            return None
+        # import ipdb
+        # ipdb.set_trace()
         n_total_samples = len(game_samples)
 
         """ 
@@ -379,8 +430,10 @@ class LowDimFastBatchTargetWorker:
 
             game_history = game_history.subset(max([0, game_pos - self.config.stacked_observations + 1]), 16)
 
-            values, rewards, line_overflow_rewards, renewable_consumption_rewards, \
-            running_cost_rewards, balanced_gen_rewards, reactive_power_rewards, \
+
+            # line_overflow_rewards, renewable_consumption_rewards, \
+            # running_cost_rewards, balanced_gen_rewards, reactive_power_rewards, \
+            values, rewards, \
             actions, attacker_actions, ready_masks, closable_masks, action_highs, action_lows, \
             next_observations, masks, attacker_flags = self.make_target(
                 game_history, self.config.stacked_observations - 1, all_bootstrap_values[idx]
@@ -403,11 +456,11 @@ class LowDimFastBatchTargetWorker:
             action_low_batch.append(action_lows)
             value_batch.append(values)
             reward_batch.append(rewards)
-            line_overflow_reward_batch.append(line_overflow_rewards)
-            renewable_consumption_reward_batch.append(renewable_consumption_rewards)
-            running_cost_reward_batch.append(running_cost_rewards)
-            balanced_gen_reward_batch.append(balanced_gen_rewards)
-            reactive_power_reward_batch.append(reactive_power_rewards)
+            # line_overflow_reward_batch.append(line_overflow_rewards)
+            # renewable_consumption_reward_batch.append(renewable_consumption_rewards)
+            # running_cost_reward_batch.append(running_cost_rewards)
+            # balanced_gen_reward_batch.append(balanced_gen_rewards)
+            # reactive_power_reward_batch.append(reactive_power_rewards)
             mask_batch.append(masks)
             attacker_flag_batch.append(attacker_flags)
 
@@ -571,11 +624,11 @@ class LowDimFastBatchTargetWorker:
 
                 target_rewards.append(game_history.reward_history[current_index])
 
-                target_line_of_rewards.append(game_history.line_overflow_rewards[current_index])
-                target_renewable_consump_rewards.append(game_history.renewable_consumption_rewards[current_index])
-                target_run_cost_rewards.append(game_history.running_cost_rewards[current_index])
-                target_bal_gen_rewards.append(game_history.balanced_gen_rewards[current_index])
-                target_reac_pow_rewards.append(game_history.reactive_power_rewards[current_index])
+                # target_line_of_rewards.append(game_history.line_overflow_rewards[current_index])
+                # target_renewable_consump_rewards.append(game_history.renewable_consumption_rewards[current_index])
+                # target_run_cost_rewards.append(game_history.running_cost_rewards[current_index])
+                # target_bal_gen_rewards.append(game_history.balanced_gen_rewards[current_index])
+                # target_reac_pow_rewards.append(game_history.reactive_power_rewards[current_index])
 
                 target_next_observations.append(
                     game_history.get_stacked_observations(
@@ -597,11 +650,11 @@ class LowDimFastBatchTargetWorker:
                     target_values.append(0)
                 target_rewards.append(game_history.reward_history[current_index])
 
-                target_line_of_rewards.append(game_history.line_overflow_rewards[current_index])
-                target_renewable_consump_rewards.append(game_history.renewable_consumption_rewards[current_index])
-                target_run_cost_rewards.append(game_history.running_cost_rewards[current_index])
-                target_bal_gen_rewards.append(game_history.balanced_gen_rewards[current_index])
-                target_reac_pow_rewards.append(game_history.reactive_power_rewards[current_index])
+                # target_line_of_rewards.append(game_history.line_overflow_rewards[current_index])
+                # target_renewable_consump_rewards.append(game_history.renewable_consumption_rewards[current_index])
+                # target_run_cost_rewards.append(game_history.running_cost_rewards[current_index])
+                # target_bal_gen_rewards.append(game_history.balanced_gen_rewards[current_index])
+                # target_reac_pow_rewards.append(game_history.reactive_power_rewards[current_index])
 
                 target_next_observations.append(
                     game_history.get_stacked_observations(
@@ -632,20 +685,20 @@ class LowDimFastBatchTargetWorker:
                     game_history.get_stacked_observations(
                         0, self.config.stacked_observations)
                 )
-                if len(game_history.child_visits) > 0:
-                    random_actions = self.config.sample_random_actions(len(game_history.child_visits[0]),
-                                                                       is_attacker=False)
-                    random_actions1 = self.config.sample_random_actions(len(game_history.child_visits[0]),
-                                                                       is_attacker=True)
-                else:
-                    random_actions = self.config.sample_random_actions(self.config.mcts_num_policy_samples +
-                                                                       self.config.mcts_num_random_samples +
-                                                                       self.config.mcts_num_expert_samples,
-                                                                       is_attacker=False)
-                    random_actions1 = self.config.sample_random_actions(self.config.mcts_num_policy_samples +
-                                                                       self.config.mcts_num_random_samples +
-                                                                       self.config.mcts_num_expert_samples,
-                                                                       is_attacker=True)
+                # if len(game_history.child_visits) > 0:
+                #     random_actions = self.config.sample_random_actions(len(game_history.child_visits[0]),
+                #                                                        is_attacker=False)
+                #     random_actions1 = self.config.sample_random_actions(len(game_history.child_visits[0]),
+                #                                                        is_attacker=True)
+                # else:
+                random_actions = self.config.sample_random_actions(self.config.mcts_num_policy_samples +
+                                                                   self.config.mcts_num_random_samples +
+                                                                   self.config.mcts_num_expert_samples,
+                                                                   is_attacker=False)
+                random_actions1 = self.config.sample_random_actions(self.config.mcts_num_policy_samples +
+                                                                   self.config.mcts_num_random_samples +
+                                                                   self.config.mcts_num_expert_samples,
+                                                                   is_attacker=True)
                 actions.append(random_actions[0])
                 actions_attacker.append(random_actions1[0])
                 ready_masks.append(game_history.ready_mask_history[0])
@@ -659,11 +712,11 @@ class LowDimFastBatchTargetWorker:
         target_values = np.array(target_values)
         target_rewards = np.array(target_rewards)
 
-        target_line_of_rewards = np.array(target_line_of_rewards)
-        target_renewable_consump_rewards = np.array(target_renewable_consump_rewards)
-        target_run_cost_rewards = np.array(target_run_cost_rewards)
-        target_bal_gen_rewards = np.array(target_bal_gen_rewards)
-        target_reac_pow_rewards = np.array(target_reac_pow_rewards)
+        # target_line_of_rewards = np.array(target_line_of_rewards)
+        # target_renewable_consump_rewards = np.array(target_renewable_consump_rewards)
+        # target_run_cost_rewards = np.array(target_run_cost_rewards)
+        # target_bal_gen_rewards = np.array(target_bal_gen_rewards)
+        # target_reac_pow_rewards = np.array(target_reac_pow_rewards)
 
         target_masks = np.array(target_masks)
         target_next_observations = np.array(target_next_observations)
@@ -674,9 +727,9 @@ class LowDimFastBatchTargetWorker:
         action_lows = np.array(action_lows)
         attacker_flags = np.array(attacker_flags)
 
+        # target_line_of_rewards, target_renewable_consump_rewards, target_run_cost_rewards, \
+        # target_bal_gen_rewards, target_reac_pow_rewards, \
         return target_values, target_rewards, \
-               target_line_of_rewards, target_renewable_consump_rewards, target_run_cost_rewards, \
-               target_bal_gen_rewards, target_reac_pow_rewards, \
                actions, actions_attacker, ready_masks, closable_masks, action_highs, action_lows, \
                target_next_observations, target_masks, attacker_flags
 

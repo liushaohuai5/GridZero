@@ -23,8 +23,8 @@ import matplotlib
 # print(matplotlib.get_backend())
 import matplotlib.pyplot as plt
 
-up_or_down = '-'      # 0 for down, 1 for up
-percentage = 0.4
+up_or_down = '+'      # 0 for down, 1 for up
+percentage = 0.1
 force_rerun = False
 start_sample_idx = [
     # 22753,
@@ -32,7 +32,7 @@ start_sample_idx = [
     # 74593,
     # 45793,
     # 32257,
-    #                 53569,
+                    53569,
     # 13826, 26785,
     # 1729, 17281,
     # 34273,
@@ -40,9 +40,9 @@ start_sample_idx = [
     # 44353, 52417,
     # 67105,
     # 75169,
-    289, 4897,
-    15841,
-    31969
+    # 289, 4897,
+    # 15841,
+    # 31969
 ]
 scores = []
 for epi_idx, start_idx in enumerate(start_sample_idx):

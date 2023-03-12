@@ -8,7 +8,9 @@ from torch.cuda.amp import autocast
 from game.gridsim.utils import *
 import torch.nn.functional as F
 import copy
+from torch_utils import profile
 
+# @profile
 def run_multi_support_adversarial(observations, model, config,
                                   ready_masks=None, closable_masks=None,
                                   action_highs=None, action_lows=None, origin_states=None,
@@ -27,7 +29,7 @@ def run_multi_support_adversarial(observations, model, config,
         attacker_actions_pool = []
 
         _, root_reward_pred, policy_info, attacker_policy_info, roots_hidden_state = \
-            model.initial_inference(torch_utils.numpy_to_tensor(observations), is_attackers.tolist())
+            model.initial_inference(torch_utils.numpy_to_tensor(observations))
 
         # if root_reward_pred.size(-1) != 1:
         #     root_reward_pred = torch_utils.support_to_scalar(root_reward_pred, config.reward_support_size, config.reward_support_step)

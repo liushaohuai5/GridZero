@@ -22,6 +22,8 @@ from torch.cuda.amp import autocast
 import collections
 from Reward.rewards import *
 from ori_opf_SG126 import traditional_solver
+from model_jm.plot_sg126_net import Visualizer
+import imageio
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -33,21 +35,22 @@ class GameHistory:
     def __init__(self):
         self.observation_history = []
         self.origin_state_history = []
-        self.render_history = []
+
+        # self.render_history = []
         self.action_history = []
         self.attacker_action_history = []
         self.reward_history = []
         self.reward_true_history = []
 
-        self.line_overflow_rewards = []
-        self.renewable_consumption_rewards = []
-        self.running_cost_rewards = []
-        self.balanced_gen_rewards = []
-        self.reactive_power_rewards = []
+        # self.line_overflow_rewards = []
+        # self.renewable_consumption_rewards = []
+        # self.running_cost_rewards = []
+        # self.balanced_gen_rewards = []
+        # self.reactive_power_rewards = []
 
-        self.frames = []
-        self.trees = []
-        self.phys_states = []
+        # self.frames = []
+        # self.trees = []
+        # self.phys_states = []
 
         self.ready_mask_history = []
         self.closable_mask_history = []
@@ -57,12 +60,12 @@ class GameHistory:
         # self.to_play_history = []
         self.attacker_flag_history = []
 
-        self.child_visits = []
-        self.child_values = []
-        self.child_qinits = []
+        # self.child_visits = []
+        # self.child_values = []
+        # self.child_qinits = []
         self.root_values = []
-        self.root_actions = []
-        self.root_attacker_actions = []
+        # self.root_actions = []
+        # self.root_attacker_actions = []
 
         self.reanalysed_predicted_root_values = None
 
@@ -74,27 +77,10 @@ class GameHistory:
         self.attack_priorities = []
         self.game_attack_priority = 0
 
-    # def game_over(self):
-    #     self.observation_history = ray.put(np.array(self.observation_history).astype(np.float32))
-    #     self.origin_state_history = ray.put(np.array(self.origin_state_history).astype(np.float32))
-    #     self.action_history = ray.put(np.array(self.action_history).astype(np.float32))
-    #     self.attacker_action_history = ray.put(np.array(self.attacker_action_history).astype(np.float32))
-    #     self.ready_mask_history = ray.put(np.array(self.ready_mask_history).astype(np.float32))
-    #     self.closable_mask_history = ray.put(np.array(self.closable_mask_history).astype(np.float32))
-    #     self.action_high_history = ray.put(np.array(self.action_high_history).astype(np.float32))
-    #     self.action_low_history = ray.put(np.array(self.action_low_history).astype(np.float32))
-    #     self.attacker_flag_history = ray.put(np.array(self.attacker_flag_history).astype(np.int32))
-    #     self.root_actions = ray.put(np.array(self.root_actions).astype(np.float32))
-    #     self.root_attacker_actions = ray.put(np.array(self.root_attacker_actions).astype(np.float32))
-    #     self.child_visits = ray.put(np.array(self.child_visits).astype(np.float32))
-    #     self.child_qinits = ray.put(np.array(self.child_qinits).astype(np.float32))
-    #     self.child_values = ray.put(np.array(self.child_values).astype(np.float32))
-    #     self.reward_true_history = ray.put(np.array(self.reward_true_history).astype(np.float32))
-    #     return self
-
     def game_over(self):
-        self.observation_history = np.array(self.observation_history).astype(np.float32)
-        self.origin_state_history = np.array(self.origin_state_history).astype(np.float32)
+        self.observation_history = ray.put(np.array(self.observation_history).astype(np.float32))
+        self.origin_state_history = ray.put(np.array(self.origin_state_history).astype(np.float32))
+
         self.action_history = np.array(self.action_history).astype(np.float32)
         self.attacker_action_history = np.array(self.attacker_action_history).astype(np.float32)
         self.ready_mask_history = np.array(self.ready_mask_history).astype(np.float32)
@@ -102,51 +88,45 @@ class GameHistory:
         self.action_high_history = np.array(self.action_high_history).astype(np.float32)
         self.action_low_history = np.array(self.action_low_history).astype(np.float32)
         self.attacker_flag_history = np.array(self.attacker_flag_history).astype(np.int32)
-        self.root_actions = np.array(self.root_actions).astype(np.float32)
-        self.root_attacker_actions = np.array(self.root_attacker_actions).astype(np.float32)
-        self.child_visits = np.array(self.child_visits).astype(np.float32)
-        self.child_qinits = np.array(self.child_qinits).astype(np.float32)
-        self.child_values = np.array(self.child_values).astype(np.float32)
+        # self.root_actions = np.array(self.root_actions).astype(np.float32)
+        # self.root_attacker_actions = np.array(self.root_attacker_actions).astype(np.float32)
+        # self.child_visits = np.array(self.child_visits).astype(np.float32)
+        # self.child_qinits = np.array(self.child_qinits).astype(np.float32)
+        # self.child_values = np.array(self.child_values).astype(np.float32)
         self.reward_true_history = np.array(self.reward_true_history).astype(np.float32)
+
+        # self.action_history = ray.put(np.array(self.action_history).astype(np.float32))
+        # self.attacker_action_history = ray.put(np.array(self.attacker_action_history).astype(np.float32))
+        # self.ready_mask_history = ray.put(np.array(self.ready_mask_history).astype(np.float32))
+        # self.closable_mask_history = ray.put(np.array(self.closable_mask_history).astype(np.float32))
+        # self.action_high_history = ray.put(np.array(self.action_high_history).astype(np.float32))
+        # self.action_low_history = ray.put(np.array(self.action_low_history).astype(np.float32))
+        # self.attacker_flag_history = ray.put(np.array(self.attacker_flag_history).astype(np.int32))
+        # self.root_actions = ray.put(np.array(self.root_actions).astype(np.float32))
+        # self.root_attacker_actions = ray.put(np.array(self.root_attacker_actions).astype(np.float32))
+        # self.child_visits = ray.put(np.array(self.child_visits).astype(np.float32))
+        # self.child_qinits = ray.put(np.array(self.child_qinits).astype(np.float32))
+        # self.child_values = ray.put(np.array(self.child_values).astype(np.float32))
+        # self.reward_true_history = ray.put(np.array(self.reward_true_history).astype(np.float32))
         return self
 
-    # def subset(self, pos, duration):
-    #
-    #     if pos < 0:
-    #         pos = 0
-    #
-    #     res = GameHistory()
-    #     res.observation_history = ray.get(self.observation_history)[pos:pos + duration]
-    #     res.origin_state_history = ray.get(self.origin_state_history)[pos:pos + duration]
-    #     res.action_history = ray.get(self.action_history)[pos:pos + duration]
-    #     res.attacker_action_history = ray.get(self.attacker_action_history)[pos:pos + duration]
-    #     res.reward_history = self.reward_history[pos:pos + duration]
-    #     res.reward_true_history = ray.get(self.reward_true_history)[pos:pos + duration]
-    #
-    #     res.line_overflow_rewards = self.line_overflow_rewards[pos:pos + duration]
-    #     res.renewable_consumption_rewards = self.renewable_consumption_rewards[pos:pos + duration]
-    #     res.running_cost_rewards = self.running_cost_rewards[pos:pos + duration]
-    #     res.balanced_gen_rewards = self.balanced_gen_rewards[pos:pos + duration]
-    #     res.reactive_power_rewards = self.reactive_power_rewards[pos:pos + duration]
-    #
-    #     res.child_visits = ray.get(self.child_visits)[pos:pos + duration]
-    #     res.root_values = self.root_values[pos:pos + duration]
-    #     res.root_actions = ray.get(self.root_actions)[pos:pos + duration]
-    #     res.root_attacker_actions = ray.get(self.root_attacker_actions)[pos:pos + duration]
-    #     res.ready_mask_history = ray.get(self.ready_mask_history)[pos:pos + duration]
-    #     res.closable_mask_history = ray.get(self.closable_mask_history)[pos:pos + duration]
-    #     res.action_high_history = ray.get(self.action_high_history)[pos:pos + duration]
-    #     res.action_low_history = ray.get(self.action_low_history)[pos:pos + duration]
-    #
-    #     res.attacker_flag_history = ray.get(self.attacker_flag_history)[pos:pos + duration]
-    #
-    #     if self.reanalysed_predicted_root_values is not None:
-    #         res.reanalysed_predicted_root_values = self.reanalysed_predicted_root_values[pos:pos + duration]
-    #
-    #     if self.priorities is not None:
-    #         res.priorities = self.priorities[pos:pos + duration]
-    #
-    #     return res
+    # def game_over(self):
+    #     self.observation_history = np.array(self.observation_history).astype(np.float32)
+    #     self.origin_state_history = np.array(self.origin_state_history).astype(np.float32)
+    #     self.action_history = np.array(self.action_history).astype(np.float32)
+    #     self.attacker_action_history = np.array(self.attacker_action_history).astype(np.float32)
+    #     self.ready_mask_history = np.array(self.ready_mask_history).astype(np.float32)
+    #     self.closable_mask_history = np.array(self.closable_mask_history).astype(np.float32)
+    #     self.action_high_history = np.array(self.action_high_history).astype(np.float32)
+    #     self.action_low_history = np.array(self.action_low_history).astype(np.float32)
+    #     self.attacker_flag_history = np.array(self.attacker_flag_history).astype(np.int32)
+    #     self.root_actions = np.array(self.root_actions).astype(np.float32)
+    #     self.root_attacker_actions = np.array(self.root_attacker_actions).astype(np.float32)
+    #     self.child_visits = np.array(self.child_visits).astype(np.float32)
+    #     self.child_qinits = np.array(self.child_qinits).astype(np.float32)
+    #     self.child_values = np.array(self.child_values).astype(np.float32)
+    #     self.reward_true_history = np.array(self.reward_true_history).astype(np.float32)
+    #     return self
 
     def subset(self, pos, duration):
 
@@ -154,28 +134,42 @@ class GameHistory:
             pos = 0
 
         res = GameHistory()
-        res.observation_history = self.observation_history[pos:pos + duration]
-        res.origin_state_history = self.origin_state_history[pos:pos + duration]
+        res.observation_history = ray.get(self.observation_history)[pos:pos + duration]
+        res.origin_state_history = ray.get(self.origin_state_history)[pos:pos + duration]
+        # res.action_history = ray.get(self.action_history)[pos:pos + duration]
+        # res.attacker_action_history = ray.get(self.attacker_action_history)[pos:pos + duration]
+        # res.reward_history = self.reward_history[pos:pos + duration]
+        # res.reward_true_history = ray.get(self.reward_true_history)[pos:pos + duration]
+
         res.action_history = self.action_history[pos:pos + duration]
         res.attacker_action_history = self.attacker_action_history[pos:pos + duration]
         res.reward_history = self.reward_history[pos:pos + duration]
         res.reward_true_history = self.reward_true_history[pos:pos + duration]
 
-        res.line_overflow_rewards = self.line_overflow_rewards[pos:pos + duration]
-        res.renewable_consumption_rewards = self.renewable_consumption_rewards[pos:pos + duration]
-        res.running_cost_rewards = self.running_cost_rewards[pos:pos + duration]
-        res.balanced_gen_rewards = self.balanced_gen_rewards[pos:pos + duration]
-        res.reactive_power_rewards = self.reactive_power_rewards[pos:pos + duration]
+        # res.line_overflow_rewards = self.line_overflow_rewards[pos:pos + duration]
+        # res.renewable_consumption_rewards = self.renewable_consumption_rewards[pos:pos + duration]
+        # res.running_cost_rewards = self.running_cost_rewards[pos:pos + duration]
+        # res.balanced_gen_rewards = self.balanced_gen_rewards[pos:pos + duration]
+        # res.reactive_power_rewards = self.reactive_power_rewards[pos:pos + duration]
 
-        res.child_visits = self.child_visits[pos:pos + duration]
+        # res.child_visits = ray.get(self.child_visits)[pos:pos + duration]
+        # res.root_values = self.root_values[pos:pos + duration]
+        # res.root_actions = ray.get(self.root_actions)[pos:pos + duration]
+        # res.root_attacker_actions = ray.get(self.root_attacker_actions)[pos:pos + duration]
+        # res.ready_mask_history = ray.get(self.ready_mask_history)[pos:pos + duration]
+        # res.closable_mask_history = ray.get(self.closable_mask_history)[pos:pos + duration]
+        # res.action_high_history = ray.get(self.action_high_history)[pos:pos + duration]
+        # res.action_low_history = ray.get(self.action_low_history)[pos:pos + duration]
+        # res.attacker_flag_history = ray.get(self.attacker_flag_history)[pos:pos + duration]
+
+        # res.child_visits = self.child_visits[pos:pos + duration]
         res.root_values = self.root_values[pos:pos + duration]
-        res.root_actions = self.root_actions[pos:pos + duration]
-        res.root_attacker_actions = self.root_attacker_actions[pos:pos + duration]
+        # res.root_actions = self.root_actions[pos:pos + duration]
+        # res.root_attacker_actions = self.root_attacker_actions[pos:pos + duration]
         res.ready_mask_history = self.ready_mask_history[pos:pos + duration]
         res.closable_mask_history = self.closable_mask_history[pos:pos + duration]
         res.action_high_history = self.action_high_history[pos:pos + duration]
         res.action_low_history = self.action_low_history[pos:pos + duration]
-
         res.attacker_flag_history = self.attacker_flag_history[pos:pos + duration]
 
         if self.reanalysed_predicted_root_values is not None:
@@ -185,6 +179,43 @@ class GameHistory:
             res.priorities = self.priorities[pos:pos + duration]
 
         return res
+
+    # def subset(self, pos, duration):
+    #
+    #     if pos < 0:
+    #         pos = 0
+    #
+    #     res = GameHistory()
+    #     res.observation_history = self.observation_history[pos:pos + duration]
+    #     res.origin_state_history = self.origin_state_history[pos:pos + duration]
+    #     res.action_history = self.action_history[pos:pos + duration]
+    #     res.attacker_action_history = self.attacker_action_history[pos:pos + duration]
+    #     res.reward_history = self.reward_history[pos:pos + duration]
+    #     res.reward_true_history = self.reward_true_history[pos:pos + duration]
+    #
+    #     res.line_overflow_rewards = self.line_overflow_rewards[pos:pos + duration]
+    #     res.renewable_consumption_rewards = self.renewable_consumption_rewards[pos:pos + duration]
+    #     res.running_cost_rewards = self.running_cost_rewards[pos:pos + duration]
+    #     res.balanced_gen_rewards = self.balanced_gen_rewards[pos:pos + duration]
+    #     res.reactive_power_rewards = self.reactive_power_rewards[pos:pos + duration]
+    #
+    #     res.child_visits = self.child_visits[pos:pos + duration]
+    #     res.root_values = self.root_values[pos:pos + duration]
+    #     res.root_actions = self.root_actions[pos:pos + duration]
+    #     res.root_attacker_actions = self.root_attacker_actions[pos:pos + duration]
+    #     res.ready_mask_history = self.ready_mask_history[pos:pos + duration]
+    #     res.closable_mask_history = self.closable_mask_history[pos:pos + duration]
+    #     res.action_high_history = self.action_high_history[pos:pos + duration]
+    #     res.action_low_history = self.action_low_history[pos:pos + duration]
+    #     res.attacker_flag_history = self.attacker_flag_history[pos:pos + duration]
+    #
+    #     if self.reanalysed_predicted_root_values is not None:
+    #         res.reanalysed_predicted_root_values = self.reanalysed_predicted_root_values[pos:pos + duration]
+    #
+    #     if self.priorities is not None:
+    #         res.priorities = self.priorities[pos:pos + duration]
+    #
+    #     return res
 
     def store_search_statistics(self, root):
         # Turn visit count from root into a policy
@@ -200,10 +231,10 @@ class GameHistory:
                 root_child_qinit.append(root.children[action_id].q_init)
                 root_child_value.append(root.children[action_id].value())
 
-            self.child_qinits.append(root_child_qinit)
-            self.child_values.append(root_child_value)
-            self.child_visits.append(root_child_visit)
-            self.root_actions.append(root_action)
+            # self.child_qinits.append(root_child_qinit)
+            # self.child_values.append(root_child_value)
+            # self.child_visits.append(root_child_visit)
+            # self.root_actions.append(root_action)
             self.root_values.append(root.value())
         else:
             self.root_values.append(None)
@@ -442,6 +473,8 @@ class ExpertPlay:
         self.id = id
         self.Qs = [collections.deque(maxlen=10) for _ in range(config.expert_n_parallel)]
 
+        # time.sleep(10000)
+
     def set_weights(self, weights):
         self.model.set_weights(weights)
 
@@ -452,16 +485,16 @@ class ExpertPlay:
         while training_steps < self.config.training_steps:
             training_steps = ray.get(self.shared_storage.get_info.remote("training_step"))
             new_model_index = training_steps // self.config.checkpoint_interval
+            # try:
             if new_model_index > self.last_model_index:
                 self.last_model_index = new_model_index
                 self.model.set_weights(ray.get(self.shared_storage.get_info.remote("weights")))
                 self.model.to('cuda')
                 self.model.eval()
 
-            try:
-                game_histories = self.play_expert_games(training_steps)
-            except:
-                continue
+            game_histories = self.play_expert_games(training_steps)
+            # except:
+            #     continue
 
             for game_history in game_histories:
                 game_history.game_over()
@@ -670,11 +703,11 @@ class ExpertPlay:
             game_history.reward_history.append(0)
             game_history.reward_true_history.append(0)
             # game_history.root_values.append(0)
-            game_history.line_overflow_rewards.append(0)
-            game_history.renewable_consumption_rewards.append(0)
-            game_history.running_cost_rewards.append(0)
-            game_history.balanced_gen_rewards.append(0)
-            game_history.reactive_power_rewards.append(0)
+            # game_history.line_overflow_rewards.append(0)
+            # game_history.renewable_consumption_rewards.append(0)
+            # game_history.running_cost_rewards.append(0)
+            # game_history.balanced_gen_rewards.append(0)
+            # game_history.reactive_power_rewards.append(0)
             game_history.ready_mask_history.append(ready_mask)
             game_history.closable_mask_history.append(closable_mask)
             game_history.action_high_history.append(action_high)
@@ -748,7 +781,7 @@ class ExpertPlay:
 
                 if is_attackers[i]:
                     # print(self.config.N_k)
-                    if settings.num_line - sum(line_status[i]) >= self.config.N_k or np.random.random() < 0.9:
+                    if settings.num_line - sum(line_status[i]) >= self.config.N_k or np.random.random() > self.config.attack_prob:
                         attacker_action = np.zeros_like(attacker_action)
                         attacker_action[-1] = 1
                         game_history.attack_priorities.append(0.1)
@@ -829,15 +862,15 @@ class ExpertPlay:
                 game_history.reward_true_history.append(reward)
                 game_history.attacker_flag_history.append(not is_attackers[i] if self.config.add_attacker else is_attackers[i])
 
-                game_history.line_overflow_rewards.append(line_over_flow_reward(next_observation, settings))
-                game_history.renewable_consumption_rewards.append(renewable_consumption_reward(next_observation, settings))
-                game_history.running_cost_rewards.append(running_cost_reward_v2(next_observation, self.envs[i].last_obs, settings))
-                game_history.balanced_gen_rewards.append(balanced_gen_reward(next_observation, settings))
-                game_history.reactive_power_rewards.append(gen_reactive_power_reward(next_observation, settings))
+                # game_history.line_overflow_rewards.append(line_over_flow_reward(next_observation, settings))
+                # game_history.renewable_consumption_rewards.append(renewable_consumption_reward(next_observation, settings))
+                # game_history.running_cost_rewards.append(running_cost_reward_v2(next_observation, self.envs[i].last_obs, settings))
+                # game_history.balanced_gen_rewards.append(balanced_gen_reward(next_observation, settings))
+                # game_history.reactive_power_rewards.append(gen_reactive_power_reward(next_observation, settings))
 
-                game_history.child_visits.append(mcts_visit_count)
-                game_history.root_actions.append(mcts_action)
-                game_history.root_attacker_actions.append(mcts_attacker_action)
+                # game_history.child_visits.append(mcts_visit_count)
+                # game_history.root_actions.append(mcts_action)
+                # game_history.root_attacker_actions.append(mcts_attacker_action)
                 game_history.root_values.append(mcts_value)
                 game_history.ready_mask_history.append(ready_mask)
                 game_history.closable_mask_history.append(closable_mask)
@@ -929,13 +962,14 @@ class SelfPlay:
         while training_steps < self.config.training_steps:
             training_steps = ray.get(self.shared_storage.get_info.remote("training_step"))
             new_model_index = training_steps // self.config.checkpoint_interval
-            if new_model_index > self.last_model_index:
-                self.last_model_index = new_model_index
-                self.model.set_weights(ray.get(self.shared_storage.get_info.remote("weights")))
-                self.model.to('cuda')
-                self.model.eval()
-                print("selfplay update!!!!!!!!")
             try:
+                if new_model_index > self.last_model_index:
+                    self.last_model_index = new_model_index
+                    self.model.set_weights(ray.get(self.shared_storage.get_info.remote("weights")))
+                    self.model.to('cuda')
+                    self.model.eval()
+                    print("selfplay update!!!!!!!!")
+
                 game_histories = self.play_multi_games(training_steps)
             except:
                 continue
@@ -981,11 +1015,11 @@ class SelfPlay:
             game_history.reward_history.append(0)
             game_history.reward_true_history.append(0)
             # game_history.root_values.append(0)
-            game_history.line_overflow_rewards.append(0)
-            game_history.renewable_consumption_rewards.append(0)
-            game_history.running_cost_rewards.append(0)
-            game_history.balanced_gen_rewards.append(0)
-            game_history.reactive_power_rewards.append(0)
+            # game_history.line_overflow_rewards.append(0)
+            # game_history.renewable_consumption_rewards.append(0)
+            # game_history.running_cost_rewards.append(0)
+            # game_history.balanced_gen_rewards.append(0)
+            # game_history.reactive_power_rewards.append(0)
             game_history.ready_mask_history.append(ready_mask)
             game_history.closable_mask_history.append(closable_mask)
             game_history.action_high_history.append(action_high)
@@ -1058,7 +1092,7 @@ class SelfPlay:
 
                 if is_attackers[i]:
                     # print(self.config.N_k)
-                    if settings.num_line - sum(line_status[i]) >= self.config.N_k or np.random.random() < 0.8:
+                    if settings.num_line - sum(line_status[i]) >= self.config.N_k or np.random.random() > self.config.attack_prob:
                         attacker_action = np.zeros_like(attacker_action)
                         attacker_action[-1] = 1
                         game_history.attack_priorities.append(0.1)
@@ -1132,15 +1166,15 @@ class SelfPlay:
                 game_history.reward_true_history.append(reward)
                 game_history.attacker_flag_history.append(not is_attackers[i] if self.config.add_attacker else is_attackers[i])
 
-                game_history.line_overflow_rewards.append(line_over_flow_reward(next_observation, settings))
-                game_history.renewable_consumption_rewards.append(renewable_consumption_reward(next_observation, settings))
-                game_history.running_cost_rewards.append(running_cost_reward_v2(next_observation, self.envs[i].last_obs, settings))
-                game_history.balanced_gen_rewards.append(balanced_gen_reward(next_observation, settings))
-                game_history.reactive_power_rewards.append(gen_reactive_power_reward(next_observation, settings))
+                # game_history.line_overflow_rewards.append(line_over_flow_reward(next_observation, settings))
+                # game_history.renewable_consumption_rewards.append(renewable_consumption_reward(next_observation, settings))
+                # game_history.running_cost_rewards.append(running_cost_reward_v2(next_observation, self.envs[i].last_obs, settings))
+                # game_history.balanced_gen_rewards.append(balanced_gen_reward(next_observation, settings))
+                # game_history.reactive_power_rewards.append(gen_reactive_power_reward(next_observation, settings))
 
-                game_history.child_visits.append(mcts_visit_count)
-                game_history.root_actions.append(mcts_action)
-                game_history.root_attacker_actions.append(mcts_attacker_action)
+                # game_history.child_visits.append(mcts_visit_count)
+                # game_history.root_actions.append(mcts_action)
+                # game_history.root_attacker_actions.append(mcts_attacker_action)
                 game_history.root_values.append(mcts_value)
                 game_history.ready_mask_history.append(ready_mask)
                 game_history.closable_mask_history.append(closable_mask)
@@ -1164,20 +1198,20 @@ class SelfPlay:
         for i, game_history in enumerate(game_histories):
             print("SelfPlay, Len={}, Reward={}, info={}".format(len(game_history.reward_true_history),
                                              sum(game_history.reward_true_history), infos[i]))
-            line_overflow_mean += np.mean(game_history.line_overflow_rewards)
-            renewable_consumption_mean += np.mean(game_history.renewable_consumption_rewards)
-            running_cost_mean += np.mean(game_history.running_cost_rewards)
-            bal_gen_mean += np.mean(game_history.balanced_gen_rewards)
-            reac_power_mean += np.mean(game_history.reactive_power_rewards)
+            # line_overflow_mean += np.mean(game_history.line_overflow_rewards)
+            # renewable_consumption_mean += np.mean(game_history.renewable_consumption_rewards)
+            # running_cost_mean += np.mean(game_history.running_cost_rewards)
+            # bal_gen_mean += np.mean(game_history.balanced_gen_rewards)
+            # reac_power_mean += np.mean(game_history.reactive_power_rewards)
             game_history.game_attack_priority = sum(game_history.attack_priorities)
 
-        self.shared_storage.set_info.remote({
-            "line_overflow_mean": line_overflow_mean / self.config.n_parallel,
-            "renewable_consumption_mean": renewable_consumption_mean / self.config.n_parallel,
-            "running_cost_mean": running_cost_mean / self.config.n_parallel,
-            "bal_gen_mean": bal_gen_mean / self.config.n_parallel,
-            "reac_power_mean": reac_power_mean / self.config.n_parallel
-        })
+        # self.shared_storage.set_info.remote({
+        #     "line_overflow_mean": line_overflow_mean / self.config.n_parallel,
+        #     "renewable_consumption_mean": renewable_consumption_mean / self.config.n_parallel,
+        #     "running_cost_mean": running_cost_mean / self.config.n_parallel,
+        #     "bal_gen_mean": bal_gen_mean / self.config.n_parallel,
+        #     "reac_power_mean": reac_power_mean / self.config.n_parallel
+        # })
         return game_histories
 
 
@@ -1236,10 +1270,13 @@ class LowDimTestWorker:
         self.replay_buffer = replay_buffer
         # self.Q = collections.deque(maxlen=10)
         self.test_idxs = [
-            22753, 16129, 74593, 45793, 32257, 53569, 13826,
+            22753, 16129, 74593, 45793, 32257,
+            53569,
+            13826,
             26785,
             1729, 17281,
             34273, 36289, 44353, 52417, 67105, 75169, 289, 4897, 15841, 31969,
+
             # 16980-144
             # 67600,
             #                 15250, 6320, 3980, 6620, 94800,
@@ -1253,6 +1290,7 @@ class LowDimTestWorker:
                                      two_player=True,    # True for no attack happens
                                      attack_all=config.attack_all
                                      ) for _ in range(len(self.test_idxs))]
+        self.visualizer = Visualizer()
 
     def spin_fast(self):
         training_step = 0
@@ -1263,18 +1301,20 @@ class LowDimTestWorker:
                 voltage_violations, reactive_violations, bal_p_violations, soft_overflows, hard_overflows = 0, 0, 0, 0, 0
                 running_costs = []
                 renewable_consumption_rate = []
-                self.model.set_weights(ray.get(self.shared_storage.get_info.remote("weights")))
-                self.model.to('cuda')
-                self.model.eval()
-                print(f'test_model updated!!!')
-                last_test_index += 1
-                test_episode_lengths, test_total_rewards, test_mean_values = [], [], []
 
-                game_histories, epi_vol_voilations, epi_reac_violations, epi_bal_p_violations, epi_soft_overflows, epi_hard_overflows, epi_running_cost, epi_renewable_consumption \
-                    = self.play_games_fast(temperature=0, train_steps=training_step)
+                try:
+                    self.model.set_weights(ray.get(self.shared_storage.get_info.remote("weights")))
+                    self.model.to('cuda')
+                    self.model.eval()
+                    print(f'test_model updated!!!')
+                    last_test_index += 1
+                    test_episode_lengths, test_total_rewards, test_mean_values = [], [], []
 
-                # import ipdb
-                # ipdb.set_trace()
+                    game_histories, epi_vol_voilations, epi_reac_violations, epi_bal_p_violations, epi_soft_overflows, epi_hard_overflows, epi_running_cost, epi_renewable_consumption \
+                        = self.play_games_fast(temperature=0, train_steps=training_step)
+                except:
+                    continue
+
                 for i, game_history in enumerate(game_histories):
                     test_episode_lengths.append(len(game_history.action_history)-1)
                     test_total_rewards.append(sum(game_history.reward_true_history))
@@ -1731,6 +1771,13 @@ class LowDimTestWorker:
             action_lows.append(action_low)
             line_status.append(observations[i].line_status)
             root_rewards.append(0)
+            if self.config.log_pic:
+                if not os.path.exists(os.path.join(self.config.results_path, f'training_{train_steps}/epi_{self.test_idxs[i]}')):
+                    os.makedirs(os.path.join(self.config.results_path, f'training_{train_steps}/epi_{self.test_idxs[i]}'))
+                self.visualizer.plot(observations[i].gen_p, observations[i].gen_q, observations[i].load_p,
+                                     observations[i].load_q, observations[i].gen_status,
+                                     save_path=os.path.join(self.config.results_path, f'training_{train_steps}/epi_{self.test_idxs[i]}'),
+                                     step=len(game_history.action_history))
 
         ori_states = np.array(ori_states)
         dones = [0 for i in range(len(self.test_idxs))]
@@ -1859,6 +1906,12 @@ class LowDimTestWorker:
                 game_history.reward_true_history.append(reward)
                 game_history.root_values.append(mcts_value)
 
+                if self.config.log_pic:
+                    self.visualizer.plot(next_observation.gen_p, next_observation.gen_q, next_observation.load_p,
+                                         next_observation.load_q, next_observation.gen_status,
+                                         save_path=os.path.join(self.config.results_path, f'training_{train_steps}/epi_{self.test_idxs[i]}'),
+                                         step=len(game_history.action_history))
+
                 if len(game_history.action_history) % 10 == 0:
                     print('----------------------------------------------------------')
                     print(f'test_start_idx={self.test_idxs[i]}, step={len(game_history.action_history)}, reward={reward:.3f}, '
@@ -1900,6 +1953,17 @@ class LowDimTestWorker:
                     write = csv.writer(f)
                     write.writerow(headers)
                     write.writerows(data)
+                # kk = ['gen', 'line', 'reactive']
+                # for k, type in enumerate(['active_power', 'line_loading', 'reactive_power']):
+                #     GIF = []
+                #     for i in range(self.config.max_moves+1):
+                #         try:
+                #             GIF.append(imageio.imread(os.path.join(self.config.results_path, f'training_{train_steps}/epi_{self.test_idxs[i]}/{type}/{kk[k]}_step_{i+1}.png')))
+                #         except:
+                #             break
+                #     imageio.mimsave(os.path.join(self.config.results_path, f'training_{train_steps}/epi_{self.test_idxs[i]}/{type}/{type}_{self.test_idxs[i]}.gif'), GIF, duration=0.5)
+
+        self.visualizer.close()
 
         return game_histories, voltage_violations, reactive_violations, bal_p_violations, soft_overflows, hard_overflows, \
                 [sum(running_costs[i]) for i in range(len(self.test_idxs))], \
