@@ -64,7 +64,7 @@ class GridSimExperientConfig:
 
         self.reward_func = 'self_reward'
         # self.reward_func = 'epri_reward'
-        self.coeff_line_over_flow = 3
+        self.coeff_line_over_flow = 1
         self.coeff_line_disconnect = 1
         self.coeff_renewable_consumption = 2
         self.coeff_thermal_backup = 1
@@ -260,8 +260,9 @@ class GridSimExperientConfig:
 
         action_dim_p = obs.action_space['adjust_gen_p'].shape[0]
         action_dim_v = obs.action_space['adjust_gen_v'].shape[0]
-        self.generator_num = action_dim_p
-        self.one_hot_dim = self.generator_num + 1
+        self.generator_num = action_dim_p - 1
+        # self.one_hot_dim = self.generator_num + 1
+        self.one_hot_dim = len(settings.thermal_ids) + 1
 
         if not self.attack_all:
             self.attacker_action_dim = len(settings.white_list_random_disconnection) + 1
@@ -270,16 +271,15 @@ class GridSimExperientConfig:
 
         if self.parameters['only_power']:
             self.parameters['action_dim'] = action_dim_p
-            self.rew_dyn_act_dim = self.generator_num + (self.generator_num + 1) + (self.generator_num + 1)
+            self.rew_dyn_act_dim = self.generator_num + 2 * self.one_hot_dim
             # self.rew_dyn_act_dim = self.generator_num + 2
             self.mlp_action_shape = self.rew_dyn_act_dim
-            self.policy_act_dim = self.generator_num + self.generator_num + (self.generator_num + 1) + (self.generator_num + 1)
+            self.policy_act_dim = self.generator_num + self.generator_num + 2 * self.one_hot_dim
         else:
             self.parameters['action_dim'] = action_dim_p + action_dim_v
-            self.rew_dyn_act_dim = 2 * self.generator_num + (self.generator_num + 1) + (self.generator_num + 1)
+            self.rew_dyn_act_dim = 2 * self.generator_num + 2 * self.one_hot_dim
             self.mlp_action_shape = self.rew_dyn_act_dim
-            self.policy_act_dim = 2 * self.generator_num + 2 * self.generator_num + (self.generator_num + 1) + (
-                        self.generator_num + 1)
+            self.policy_act_dim = 2 * self.generator_num + 2 * self.generator_num + 2 * self.one_hot_dim
         state, ready_thermal_mask, closable_thermal_mask = get_state_from_obs(obs, settings, self.parameters)
         self.mlp_obs_shape = len(state)
         self.env_action_space = obs.action_space

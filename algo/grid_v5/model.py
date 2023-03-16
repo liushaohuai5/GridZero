@@ -610,6 +610,8 @@ class MLPModel(nn.Module):
         generator_num = self.config.generator_num
         one_hot_dim = self.config.one_hot_dim
         if ready_masks is not None:
+            ready_masks = np.concatenate((ready_masks[:, settings.thermal_ids], ready_masks[:, -1:]), axis=1)
+            closable_masks = np.concatenate((closable_masks[:, settings.thermal_ids], closable_masks[:, -1:]), axis=1)
             if not self.config.parameters['only_power']:
                 ready_masks = np.concatenate((ready_masks[:, :generator_num], ready_masks[:, -1:]), axis=1)
                 closable_masks = np.concatenate((closable_masks[:, :generator_num], closable_masks[:, -1:]), axis=1)
@@ -634,6 +636,9 @@ class MLPModel(nn.Module):
             #                                                torch.from_numpy(action_lows)
             #                                                    ).detach().cpu().numpy()
             # modified_action = copy.deepcopy(real_actions)
+            modified_action = np.concatenate((modified_action[:, :, :settings.balanced_id],
+                                              np.zeros_like(modified_action[:, :, :settings.balanced_id])[:, :, 0:1],
+                                              modified_action[:, :, settings.balanced_id:]), axis=2)
 
             if self.config.parameters['only_power']:
                 delta = np.expand_dims(delta_load_p, axis=1).repeat(num, axis=1) - \
@@ -672,16 +677,16 @@ class MLPModel(nn.Module):
             open_action_low[:, :, settings.balanced_id] = np.expand_dims(gen_p[:, settings.balanced_id], axis=1).repeat(num, axis=1) + action_low[:, :, settings.balanced_id]
 
             close_mask = ((delta < -40).astype(np.float32)
-                          + (renewable_consump_rate < 0.7 + 0.2 * random.random()).astype(np.float32)
-                          + (next_load_p.sum(-1) - open_action_low.sum(-1) < 80)
-                          + (sum_renewable_up_redundency > 100).astype(np.float32)
+                          + (renewable_consump_rate < 0.6 + 0.3 * random.random()).astype(np.float32)
+                          # + (next_load_p.sum(-1) - open_action_low.sum(-1) < 80)
+                          # + (sum_renewable_up_redundency > 100).astype(np.float32)
                           # + (np.expand_dims(balance_down_redundency, axis=1).repeat(num, axis=1) < -20).astype(np.float32)
                           # + (q_underload.sum(-1) > 0).astype(np.float32)
                           ) * (closable_masks.sum(-1) > 0).astype(np.float32) #* (ready_masks.sum(-1) > 0).astype(np.float32)
             close_mask = (close_mask > 0).astype(np.float32)
             open_mask = ((delta > 40).astype(np.float32)
                          # + (np.expand_dims(balance_up_redundency, axis=1).repeat(num, axis=1) < -20).astype(np.float32)
-                         + (np.expand_dims(delta_load_p, axis=1).repeat(num, axis=1) > 150).astype(np.float32)
+                         # + (np.expand_dims(delta_load_p, axis=1).repeat(num, axis=1) > 150).astype(np.float32)
                          # + (running_cost < -0.5).astype(np.float32)
                          # + (next_load_p.sum(-1) - open_action_low.sum(-1) < 30) * (closable_masks.sum(-1) == 0)
                          # + (q_overload.sum(-1) > 0).astype(np.float32)
@@ -710,15 +715,15 @@ class MLPModel(nn.Module):
                                                      policy[:, 4 * generator_num:4*generator_num+one_hot_dim], \
                                                      policy[:, 4*generator_num+one_hot_dim:]
 
-        min_gen_p = np.append(np.asarray(settings.min_gen_p), 0)
+        min_gen_p = np.append(np.asarray(settings.min_gen_p)[settings.thermal_ids], 0)
         min_gen_p = np.expand_dims(min_gen_p, axis=0).repeat(policy.shape[0], axis=0)
         min_gen_p = np.expand_dims(min_gen_p, axis=1).repeat(num, axis=1)
         if ori_states is not None:
-            open_factor = F.softmax(torch.from_numpy(-np.abs(min_gen_p + np.expand_dims(delta, axis=2).repeat(min_gen_p.shape[2], axis=2))).float().to('cuda')/80, dim=2)*50
-            close_factor = F.softmax(torch.from_numpy(-np.abs(min_gen_p - np.expand_dims(delta, axis=2).repeat(min_gen_p.shape[2], axis=2))).float().to('cuda')/80, dim=2)*50
+            open_factor = F.softmax(torch.from_numpy(-np.abs(min_gen_p - np.expand_dims(delta, axis=2).repeat(min_gen_p.shape[2], axis=2))).float().to('cuda')/80, dim=2)*50
+            close_factor = F.softmax(torch.from_numpy(-np.abs(min_gen_p + np.expand_dims(delta, axis=2).repeat(min_gen_p.shape[2], axis=2))).float().to('cuda')/80, dim=2)*50
             open_close_factor = torch.cat((open_factor, close_factor), dim=0)
-            open_close_factor[:, :, settings.renewable_ids] = 1
-            open_close_factor[:, :, settings.balanced_id] = 1
+            # open_close_factor[:, :, settings.renewable_ids] = 1
+            # open_close_factor[:, :, settings.balanced_id] = 1
         else:
             open_close_factor = torch.ones((min_gen_p.shape[0], min_gen_p.shape[1], min_gen_p.shape[2])).float().to('cuda')
             open_close_factor = open_close_factor.repeat(2, 1, 1)
@@ -778,12 +783,13 @@ class MLPModel(nn.Module):
 
 
     def modify_policy(self, action, ready_masks, closable_masks, action_high, action_low, is_test=False):
-        ori_mu = action
+        ori_mu = torch.cat((action[:, :settings.balanced_id], torch.zeros_like(action)[:, 0:1], action[:, settings.balanced_id:]), dim=1)
         mu = (ori_mu + torch.ones_like(ori_mu)) / (2 * torch.ones_like(ori_mu)) * (
                 action_high - action_low) + action_low
         modified_mu = mu * (torch.ones_like(ready_masks) - ready_masks)[:, :-1] * (torch.ones_like(closable_masks) - closable_masks)[:, :-1]
 
         modified_mu += torch.clamp(mu * closable_masks[:, :-1], 0, 10000)
+        modified_mu = torch.cat((modified_mu[:, :settings.balanced_id], modified_mu[:, settings.balanced_id+1:]), dim=1)
         return modified_mu
 
     def check_balance(self, state, sampled_actions, action_high, action_low, ready_mask, closable_mask, norm_action=True):
@@ -844,14 +850,15 @@ class MLPModel(nn.Module):
         # import ipdb
         # ipdb.set_trace()
         change_mask = (np.abs(delta) > 30).astype(np.float32)
+        real_actions = np.concatenate((real_actions[:, :, :settings.balanced_id],
+                                       np.zeros_like(real_actions[:, :, :settings.balanced_id])[:, :, 0:1],
+                                       real_actions[:, :, settings.balanced_id:]), axis=2)
         change_mask = np.expand_dims(change_mask, axis=2).repeat(real_actions.shape[2], axis=2)
-        # change_mask = np.ones_like(change_mask)
 
         upgrade_redundency = (np.expand_dims(action_high, axis=1).repeat(real_actions.shape[1], axis=1) - real_actions) * \
                              np.expand_dims(mask, axis=1).repeat(real_actions.shape[1], axis=1)
         downgrade_redundency = (real_actions - np.expand_dims(action_low, axis=1).repeat(real_actions.shape[1], axis=1)) * \
                                np.expand_dims(mask, axis=1).repeat(real_actions.shape[1], axis=1)
-
         modification = (1 + np.sign(np.expand_dims(delta, axis=2).repeat(upgrade_redundency.shape[-1], axis=2))) / 2 * \
                        np.expand_dims(delta, axis=2).repeat(upgrade_redundency.shape[-1], axis=2) * upgrade_redundency / (
                                    np.expand_dims(upgrade_redundency.sum(2), axis=2).repeat(upgrade_redundency.shape[-1], axis=2) + 1e-3) + \
@@ -877,6 +884,7 @@ class MLPModel(nn.Module):
         #
         # modified_sampled_actions = modified_sampled_actions.clip(-0.999, 0.999)
         # return modified_sampled_actions
+        real_actions = np.concatenate((real_actions[:, :, :settings.balanced_id], real_actions[:, :, settings.balanced_id+1:]), axis=2)
         return real_actions
 
 
@@ -905,7 +913,6 @@ class MLPModel(nn.Module):
             power_mask = np.zeros_like(action_high)
             power_mask[:, :generator_num] = 1   # represent active power control dimensions
             mask *= power_mask
-        inv_mask = np.ones_like(mask) - mask  # represent non-adjustable generators, voltage control, closed or balance or open_gen_logit
 
         # if norm_action:
         #     # real_actions = np.zeros_like(sampled_actions)
@@ -920,9 +927,12 @@ class MLPModel(nn.Module):
         #               )
         # else:
         #     real_actions = sampled_actions
-        real_actions = sampled_actions[:, :, :generator_num]
+        # real_actions = sampled_actions[:, :, :generator_num]
+        real_actions = np.concatenate((sampled_actions[:, :, :settings.balanced_id],
+                                       np.zeros_like(sampled_actions[:, :, :settings.balanced_id])[:, :, 0:1],
+                                       sampled_actions[:, :, settings.balanced_id:generator_num]), axis=2)
 
-        min_gen_p = np.expand_dims(np.append(np.array(settings.min_gen_p), 0), axis=0).repeat(sampled_actions.shape[0], axis=0)
+        min_gen_p = np.expand_dims(np.append(np.array(settings.min_gen_p)[settings.thermal_ids], 0), axis=0).repeat(sampled_actions.shape[0], axis=0)
         min_gen_p = np.expand_dims(min_gen_p, axis=1).repeat(sampled_actions.shape[1], axis=1)
         if self.config.parameters['only_power']:
             delta = np.expand_dims(delta_load_p, axis=1).repeat(real_actions.shape[1], axis=1) - \
@@ -964,7 +974,12 @@ class MLPModel(nn.Module):
         modified_sampled_actions = (modified_actions - np.expand_dims(action_low, axis=1).repeat(modification.shape[1], axis=1)) / \
                                    (np.expand_dims(action_high, axis=1).repeat(modified_actions.shape[1], axis=1) -
                                     np.expand_dims(action_low, axis=1).repeat(modified_actions.shape[1], axis=1) + 1e-3) * 2 - 1
+        modified_sampled_actions = np.concatenate((modified_sampled_actions[:, :, :settings.balanced_id],
+                                                   modified_sampled_actions[:, :, settings.balanced_id + 1:]), axis=2)
 
+        mask = np.concatenate((mask[:, :settings.balanced_id], mask[:, settings.balanced_id + 1:]), axis=1)
+        inv_mask = np.ones_like(
+            mask) - mask  # represent non-adjustable generators, voltage control, closed or balance or open_gen_logit
         modified_sampled_actions = modified_sampled_actions * np.expand_dims(mask, axis=1).repeat(modified_actions.shape[1], axis=1) + \
                                    sampled_actions[:, :, :generator_num] * np.expand_dims(inv_mask, axis=1).repeat(real_actions.shape[1], axis=1)
 

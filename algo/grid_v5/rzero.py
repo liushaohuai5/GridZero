@@ -206,10 +206,10 @@ class Trainer:
         policy_log_prob = torch.cat(log_probs, dim=1)
         loss = (-target_policy * policy_log_prob).sum(1)
 
-        target_open_policy = (target_policy.unsqueeze(2).repeat(1, 1, one_hot_dim) * target_action[:, :, action_dim:action_dim+one_hot_dim]).sum(1).squeeze()
-        target_close_policy = (target_policy.unsqueeze(2).repeat(1, 1, one_hot_dim) * target_action[:, :, action_dim+one_hot_dim:]).sum(1).squeeze()
-        loss += -(torch.log_softmax(policy[:, 2*action_dim:2 * action_dim+one_hot_dim], dim=1) * target_open_policy).sum(1)
-        loss += -(torch.log_softmax(policy[:, 2 * action_dim+one_hot_dim:], dim=1) * target_close_policy).sum(1)
+        target_open_policy = (target_policy.unsqueeze(2).repeat(1, 1, one_hot_dim) * target_action[:, :, action_dim:action_dim + one_hot_dim]).sum(1).squeeze()
+        target_close_policy = (target_policy.unsqueeze(2).repeat(1, 1, one_hot_dim) * target_action[:, :, action_dim + one_hot_dim:]).sum(1).squeeze()
+        loss += -(torch.log_softmax(policy[:, 2 * action_dim:2 * action_dim + one_hot_dim], dim=1) * target_open_policy).sum(1)
+        loss += -(torch.log_softmax(policy[:, 2 * action_dim + one_hot_dim:], dim=1) * target_close_policy).sum(1)
 
         ent_action = distr.rsample()
         ent_action = ent_action.clip(-0.999, 0.999)
@@ -527,7 +527,6 @@ class Trainer:
             weight_batch = torch.from_numpy(weight_batch.copy()).float().to(device)
 
         # st = time.time()
-
         observation_batch = torch.from_numpy(observation_batch).float().to(device)  # [B,O_SHAPE]
         next_observation_batch = torch.from_numpy(next_observation_batch).float().to(device)  # [B, UNROLL + 1, OSHAPE]
         mask_batch = torch.from_numpy(mask_batch).float().to(device)  # [B, UNROLL + 1, ASHAPE]

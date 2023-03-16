@@ -62,13 +62,16 @@ def calc_running_cost_rew(last_real_gen_p, gen_status=None, last_gen_status=None
     # return r_c / 1e5 if is_real else -(r_c/1e5)**2
     return r_c / 1e5 if is_real else r_c / 1e5
 
-def combine_one_hot_action(state, action_one_hot, ready_thermal_mask, closable_thermal_mask, config, action_high, action_low, is_test=False):
+def combine_one_hot_action(state, action_one_hot, ready_thermal_mask, closable_thermal_mask, config, action_high, action_low, thermal_to_all, is_test=False):
     generator_num = config.generator_num
     one_hot_dim = config.one_hot_dim
     if config.parameters['only_power']:
-        action, open_one_hot, close_one_hot = action_one_hot[:generator_num], \
-                                              action_one_hot[generator_num:generator_num+one_hot_dim], \
-                                              action_one_hot[generator_num+one_hot_dim:]
+        # action, open_one_hot, close_one_hot = action_one_hot[:generator_num], \
+        #                                       action_one_hot[generator_num:generator_num+one_hot_dim], \
+        #                                       action_one_hot[generator_num+one_hot_dim:]
+        action = np.concatenate((action_one_hot[:settings.balanced_id], np.zeros_like(action_one_hot)[0:1], action_one_hot[settings.balanced_id:generator_num]), axis=0)
+        open_one_hot = np.matmul(action_one_hot[generator_num:generator_num+one_hot_dim], thermal_to_all)
+        close_one_hot = np.matmul(action_one_hot[generator_num+one_hot_dim:], thermal_to_all)
     else:
         action, open_one_hot, close_one_hot = action_one_hot[:2*generator_num], \
                                               action_one_hot[2*generator_num:2*generator_num+one_hot_dim], \
@@ -367,21 +370,25 @@ def get_state_from_obs(obs, settings, parameters):
 
         thermal_flag = np.zeros(len(settings.thermal_ids), dtype=np.float32)
         ready_thermal_mask = np.zeros(parameters['action_dim']+1, dtype=np.float32)
+        # ready_thermal_mask = np.zeros(len(settings.thermal_ids)+1, dtype=np.float32)
         closable_thermal_mask = np.zeros(parameters['action_dim']+1, dtype=np.float32)
-        for gen_idx in settings.thermal_ids:
+        # closable_thermal_mask = np.zeros(len(settings.thermal_ids)+1, dtype=np.float32)
+        for i, gen_idx in enumerate(settings.thermal_ids):
+            ready_thermal_mask[-1] = 1
             if not obs.gen_status[gen_idx] and obs.steps_to_recover_gen[gen_idx] == 0:
-                thermal_flag[settings.thermal_ids.index(gen_idx)] = 1
+                thermal_flag[i] = 1
                 ready_thermal_mask[gen_idx] = 1
-                ready_thermal_mask[-1] = 1
+                # ready_thermal_mask[-1] = 1
                 # if not parameters['multi_on_off']:
                 #     if parameters['enable_close_gen']:
                 #         ready_thermal_mask[-2] = 1
                 #     else:
                 #         ready_thermal_mask[-1] = 1
+            closable_thermal_mask[-1] = 1
             if obs.gen_status[gen_idx] and obs.gen_p[gen_idx] == settings.min_gen_p[gen_idx] and obs.steps_to_close_gen[gen_idx] == 0:
-                thermal_flag[settings.thermal_ids.index(gen_idx)] = -1
+                thermal_flag[i] = -1
                 closable_thermal_mask[gen_idx] = 1
-                closable_thermal_mask[-1] = 1
+                # closable_thermal_mask[-1] = 1
                 # if not parameters['multi_on_off']:
                 #     if parameters['enable_close_gen']:
                 #         closable_thermal_mask[-1] = 1
@@ -429,9 +436,9 @@ def get_state_from_obs(obs, settings, parameters):
         # state.append(np.reshape(np.array(obs.flag, dtype=np.float32), (-1,)))
         # state.append(np.reshape(np.array(obs.gen_status, dtype=np.float32)[np.asarray(settings.thermal_ids)], (-1,)))
 
-        state.append(np.reshape(np.array(obs.steps_to_recover_gen, dtype=np.float32)[settings.thermal_ids], (-1,))) #/
+        # state.append(np.reshape(np.array(obs.steps_to_recover_gen, dtype=np.float32)[settings.thermal_ids], (-1,))) #/
                      # np.array(settings.max_steps_to_recover_gen)[settings.thermal_ids])
-        state.append(np.reshape(np.array(obs.steps_to_close_gen, dtype=np.float32)[settings.thermal_ids], (-1,))) #/
+        # state.append(np.reshape(np.array(obs.steps_to_close_gen, dtype=np.float32)[settings.thermal_ids], (-1,))) #/
                      # np.array(settings.max_steps_to_close_gen)[settings.thermal_ids])
         # state.append(np.reshape(np.array(obs.count_soft_overflow_steps, dtype=np.float32), (-1,)))
         # state.append(np.reshape(np.array(obs.steps_to_reconnect_line, dtype=np.float32), (-1,)))

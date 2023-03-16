@@ -473,6 +473,13 @@ class ExpertPlay:
         self.id = id
         self.Qs = [collections.deque(maxlen=10) for _ in range(config.expert_n_parallel)]
 
+        self.thermal_to_all = np.zeros((len(settings.thermal_ids) + 1,
+                                        len(settings.thermal_ids + settings.renewable_ids + [
+                                            settings.balanced_id]) + 1))
+        for i, thermal_id in enumerate(settings.thermal_ids):
+            self.thermal_to_all[i, thermal_id] = 1
+        self.thermal_to_all[-1, -1] = 1
+
         # time.sleep(10000)
 
     def set_weights(self, weights):
@@ -485,16 +492,16 @@ class ExpertPlay:
         while training_steps < self.config.training_steps:
             training_steps = ray.get(self.shared_storage.get_info.remote("training_step"))
             new_model_index = training_steps // self.config.checkpoint_interval
-            # try:
-            if new_model_index > self.last_model_index:
-                self.last_model_index = new_model_index
-                self.model.set_weights(ray.get(self.shared_storage.get_info.remote("weights")))
-                self.model.to('cuda')
-                self.model.eval()
+            try:
+                if new_model_index > self.last_model_index:
+                    self.last_model_index = new_model_index
+                    self.model.set_weights(ray.get(self.shared_storage.get_info.remote("weights")))
+                    self.model.to('cuda')
+                    self.model.eval()
 
-            game_histories = self.play_expert_games(training_steps)
-            # except:
-            #     continue
+                game_histories = self.play_expert_games(training_steps)
+            except:
+                continue
 
             for game_history in game_histories:
                 game_history.game_over()
@@ -733,6 +740,7 @@ class ExpertPlay:
 
         steps = 0
         attack_cnts = [0 for _ in range(self.expert_n_parallel)]
+
         while sum(dones) < self.expert_n_parallel and steps < self.config.max_moves:
             steps += 1
             root_values, root_distributions, root_actions, root_attacker_actions = run_multi_support_adversarial(
@@ -795,15 +803,16 @@ class ExpertPlay:
                         game_history.attack_priorities.append(0.9)
 
                     next_observation, reward, done, info = self.envs[i].step_only_attack(attacker_action, ori_obs=True)
-                    self.Qs[i].append([ori_states[i][0], self.envs[i].last_obs.gen_p[17], action[:54].sum(),
+                    self.Qs[i].append([ori_states[i][0], self.envs[i].last_obs.gen_p[17], action1[:54].sum(),
                                        np.where(attacker_action > 0)[0],
                                        (action_highs[i] * (1 - ready_masks[i])[:-1] * (1 - closable_masks[i])[:-1]).sum(),
-                                       np.where(action[settings.num_gen:2 * settings.num_gen] > 0)[0],
-                                       np.where(action[2 * settings.num_gen + 1:-1])[0], is_attackers[i]])
+                                       np.where(np.matmul(action1[settings.num_gen-1:settings.num_gen+len(settings.thermal_ids)], self.thermal_to_all)[:-1] > 0)[0],
+                                       np.where(np.matmul(action1[settings.num_gen + len(settings.thermal_ids):], self.thermal_to_all)[:-1] > 0)[0], is_attackers[i],
+                                       np.where(ready_masks[i][:-1] > 0)[0], np.where(closable_masks[i][:-1] > 0)[0]])
 
                 else:
                     if not self.config.multi_on_off:
-                        action_true1 = combine_one_hot_action(ori_states[i], action1, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i])
+                        action_true1 = combine_one_hot_action(ori_states[i], action1, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i], self.thermal_to_all)
                     else:
                         action_true1 = modify_action_v3(action1, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i])
                     action_true, _, open_hot, close_hot = self.traditional_solver.run_opf(observations[i])
@@ -811,14 +820,19 @@ class ExpertPlay:
                     action = (action_true - action_lows[i]) / (action_highs[i] - action_lows[i] + 1e-3) * 2 - 1
                     action *= (np.ones_like(ready_masks[i]) - ready_masks[i])[:-1]
                     action *= (np.ones_like(closable_masks[i]) - closable_masks[i])[:-1]
-                    action[settings.balanced_id] = 0.0
+                    # action[settings.balanced_id] = 0.0
+                    action = np.concatenate((action[:settings.balanced_id], action[settings.balanced_id+1:]))
+                    open_hot = open_hot[settings.thermal_ids+[54]]
+                    close_hot = close_hot[settings.thermal_ids+[54]]
                     action = np.concatenate((action, open_hot, close_hot))
                     next_observation, reward, done, info = self.envs[i].step(action_true, ori_obs=True)
+
                     self.Qs[i].append([ori_states[i][0], self.envs[i].last_obs.gen_p[17], action_true[:54].sum(),
                                        np.where(attacker_action > 0)[0],
                                        (action_highs[i] * (1 - ready_masks[i])[:-1] * (1 - closable_masks[i])[:-1]).sum(),
-                                       np.where(action[settings.num_gen:2 * settings.num_gen] > 0)[0],
-                                       np.where(action[2 * settings.num_gen + 1:-1])[0], is_attackers[i]])
+                                       np.where(np.matmul(open_hot, self.thermal_to_all)[:-1] > 0)[0],
+                                       np.where(np.matmul(close_hot, self.thermal_to_all)[:-1] > 0)[0], is_attackers[i],
+                                       np.where(ready_masks[i][:-1] > 0)[0], np.where(closable_masks[i][:-1] > 0)[0]])
                     game_history.attack_priorities.append(0.1)
 
                 if attack_cnts[i] > 0:
@@ -850,7 +864,8 @@ class ExpertPlay:
                                 f'ExpertPlay, step={steps_t}, delta_load={data1[0]:.3f}, bal_gen_p={data1[1]:.3f}, '
                                 f'action_p={data1[2]:.3f}, attacker_action={data1[3]}, action_high={data1[4]:.3f}, '
                                 f'open_id={data1[5]}, close_id={data1[6]}, '
-                                f'is_attacker={data1[7]}')
+                                f'is_attacker={data1[7]},'
+                                f'ready={data1[8]}, closable={data1[9]}')
                             steps_t -= 1
 
                 game_history.action_history.append(action)
@@ -952,6 +967,13 @@ class SelfPlay:
         self.last_model_index = -1
         self.Qs = [collections.deque(maxlen=10) for _ in range(config.n_parallel)]
 
+        self.thermal_to_all = np.zeros((len(settings.thermal_ids) + 1,
+                                        len(settings.thermal_ids + settings.renewable_ids + [
+                                            settings.balanced_id]) + 1))
+        for i, thermal_id in enumerate(settings.thermal_ids):
+            self.thermal_to_all[i, thermal_id] = 1
+        self.thermal_to_all[-1, -1] = 1
+
         # time.sleep(10000)
 
     def set_weights(self, weights):
@@ -1045,6 +1067,7 @@ class SelfPlay:
 
         steps = 0
         attack_cnts = [0 for _ in range(self.n_parallel)]
+
         while sum(dones) < self.n_parallel and steps < self.config.max_moves:
             steps += 1
             root_values, root_distributions, root_actions, root_attacker_actions = run_multi_support_adversarial(
@@ -1109,20 +1132,28 @@ class SelfPlay:
                     self.Qs[i].append([ori_states[i][0], self.envs[i].last_obs.gen_p[17], action[:54].sum(),
                                        np.where(attacker_action > 0)[0],
                                        (action_highs[i] * (1 - ready_masks[i])[:-1] * (1 - closable_masks[i])[:-1]).sum(),
-                                       np.where(action[settings.num_gen:2 * settings.num_gen] > 0)[0],
-                                       np.where(action[2 * settings.num_gen + 1:-1])[0], is_attackers[i]])
+                                       np.where(np.matmul(action[settings.num_gen-1:settings.num_gen+len(settings.thermal_ids)], self.thermal_to_all)[:-1] > 0)[0],
+                                       np.where(np.matmul(action[settings.num_gen + len(settings.thermal_ids):], self.thermal_to_all)[:-1] > 0)[0], is_attackers[i],
+                                       np.where(ready_masks[i][:-1] > 0)[0], np.where(closable_masks[i][:-1] > 0)[0]])
 
                 else:
                     if not self.config.multi_on_off:
-                        action_true = combine_one_hot_action(ori_states[i], action, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i])
+                        action_true = combine_one_hot_action(ori_states[i], action, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i], self.thermal_to_all)
                     else:
                         action_true = modify_action_v3(action, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i])
                     next_observation, reward, done, info = self.envs[i].step(action_true, ori_obs=True)
                     self.Qs[i].append([ori_states[i][0], self.envs[i].last_obs.gen_p[17], action_true[:54].sum(),
                                        np.where(attacker_action > 0)[0],
                                        (action_highs[i] * (1 - ready_masks[i])[:-1] * (1 - closable_masks[i])[:-1]).sum(),
-                                       np.where(action[settings.num_gen:2 * settings.num_gen] > 0)[0],
-                                       np.where(action[2 * settings.num_gen + 1:-1])[0], is_attackers[i]])
+                                       np.where(np.matmul(action[settings.num_gen-1:settings.num_gen+len(settings.thermal_ids)], self.thermal_to_all)[:-1] > 0)[0],
+                                       np.where(np.matmul(action[settings.num_gen + len(settings.thermal_ids):], self.thermal_to_all)[:-1] > 0)[0], is_attackers[i],
+                                       np.where(ready_masks[i][:-1] > 0)[0], np.where(closable_masks[i][:-1] > 0)[0]])
+
+                    # if len(np.where(np.matmul(action[settings.num_gen + len(settings.thermal_ids):], self.thermal_to_all)[:-1] > 0)[0].tolist()) > 0:
+                    #     print(f'close_gen={np.where(np.matmul(action[settings.num_gen + len(settings.thermal_ids):], self.thermal_to_all)[:-1] > 0)[0]}')
+                    #
+                    # if len(np.where(np.matmul(action[settings.num_gen-1:settings.num_gen+len(settings.thermal_ids)], self.thermal_to_all)[:-1] > 0)[0].tolist()) > 0:
+                    #     print(f'open_gen={np.where(np.matmul(action[settings.num_gen-1:settings.num_gen+len(settings.thermal_ids)], self.thermal_to_all)[:-1] > 0)[0]}')
                     game_history.attack_priorities.append(0.1)
 
                 if attack_cnts[i] > 0:
@@ -1154,7 +1185,8 @@ class SelfPlay:
                                 f'SelfPlay, step={steps_t}, delta_load={data1[0]:.3f}, bal_gen_p={data1[1]:.3f}, '
                                 f'action_p={data1[2]:.3f}, attacker_action={data1[3]}, action_high={data1[4]:.3f}, '
                                 f'open_id={data1[5]}, close_id={data1[6]}, '
-                                f'is_attacker={data1[7]}')
+                                f'is_attacker={data1[7]},'
+                                f'ready={data1[8]}, closable={data1[9]}')
                             steps_t -= 1
 
                 game_history.action_history.append(action)
@@ -1291,6 +1323,13 @@ class LowDimTestWorker:
                                      attack_all=config.attack_all
                                      ) for _ in range(len(self.test_idxs))]
         self.visualizer = Visualizer()
+
+        self.thermal_to_all = np.zeros((len(settings.thermal_ids) + 1,
+                                        len(settings.thermal_ids + settings.renewable_ids + [
+                                            settings.balanced_id]) + 1))
+        for i, thermal_id in enumerate(settings.thermal_ids):
+            self.thermal_to_all[i, thermal_id] = 1
+        self.thermal_to_all[-1, -1] = 1
 
     def spin_fast(self):
         training_step = 0
@@ -1798,6 +1837,7 @@ class LowDimTestWorker:
 
         # with torch.no_grad():
         steps = 0
+
         while sum(dones) < len(self.test_idxs) and steps < self.config.max_moves:
             steps += 1
             root_values, root_distributions, root_actions, root_attacker_actions = run_multi_support_adversarial(
@@ -1821,6 +1861,7 @@ class LowDimTestWorker:
             next_ori_states, next_ready_masks, next_closable_masks, next_action_highs, next_action_lows = [], [], [], [], []
             next_line_status = []
             root_rewards = []
+
             for i, game_history in enumerate(game_histories):
                 if dones[i]:
                     next_ori_states.append(ori_states[i])
@@ -1841,12 +1882,12 @@ class LowDimTestWorker:
                     temperature
                 )
 
-                action_real = combine_one_hot_action(ori_states[i], action, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i], is_test=True)    # for using MCTS planning
+                action_real = combine_one_hot_action(ori_states[i], action, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i], self.thermal_to_all, is_test=True)    # for using MCTS planning
 
                 if not self.config.multi_on_off:
                     renewable_consumptions = []
                     for action_tmp in mcts_action:
-                        action_tmp_real = combine_one_hot_action(ori_states[i], action_tmp, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i])
+                        action_tmp_real = combine_one_hot_action(ori_states[i], action_tmp, ready_masks[i], closable_masks[i], self.config, action_highs[i], action_lows[i], self.thermal_to_all)
                         if self.config.parameters['only_power']:
                             renewable_consumption = sum((np.asarray(self.envs[i].last_obs.gen_p)+action_tmp_real)[settings.renewable_ids])/sum(np.asarray(self.envs[i].last_obs.nextstep_renewable_gen_p_max))
                         else:
@@ -1857,8 +1898,9 @@ class LowDimTestWorker:
                 next_observation, reward, done, info = self.envs[i].step(action_real, ori_obs=True)
 
                 self.Qs[i].append([ori_states[i][0], self.envs[i].last_obs.gen_p[17], action_real[:54].sum(),
-                               np.where(action[settings.num_gen:2*settings.num_gen] > 0)[0],
-                               np.where(action[2*settings.num_gen+1:-1])[0]])
+                                   np.where(np.matmul(action[settings.num_gen-1:settings.num_gen+len(settings.thermal_ids)], self.thermal_to_all)[:-1] > 0)[0],
+                                   np.where(np.matmul(action[settings.num_gen+len(settings.thermal_ids):], self.thermal_to_all)[:-1] > 0)[0],
+                                   np.where(ready_masks[i][:-1] > 0)[0], np.where(closable_masks[i][:-1] > 0)[0]])
                 if ((np.asarray(next_observation.rho) > settings.soft_overflow_bound) * (np.asarray(next_observation.rho) <= settings.hard_overflow_bound)).any():
                     soft_overflows[i] += 1
                 elif (np.asarray(next_observation.rho) > settings.hard_overflow_bound).any():
@@ -1896,7 +1938,9 @@ class LowDimTestWorker:
                     while len(self.Qs[i]) > 0:
                         data1 = self.Qs[i].pop()
                         print(
-                            f'epi={self.test_idxs[i]}, step={steps_t}, delta_load={data1[0]:.3f}, bal_gen_p={data1[1]:.3f}, action_p={data1[2]:.3f}, open_id={data1[3]}, close_id={data1[4]}')
+                            f'epi={self.test_idxs[i]}, step={steps_t}, delta_load={data1[0]:.3f}, bal_gen_p={data1[1]:.3f}, '
+                            f'action_p={data1[2]:.3f}, open_id={data1[3]}, close_id={data1[4]},'
+                            f'ready={data1[5]}, closable={data1[6]}')
                         steps_t -= 1
 
                 game_history.action_history.append(action)

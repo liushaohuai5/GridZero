@@ -187,14 +187,14 @@ class LowDimFastBatchTargetWorker:
                     self.model.eval()
                     print("batch worker model updated !!!")
 
-                if self.rank == 0:
-                    from line_profiler import LineProfiler
-                    lp = LineProfiler()
-                    lp_wrapper = lp(self.get_batch)
-                    batch = lp_wrapper()
-                    lp.print_stats()
-                else:
-                    batch = self.get_batch(train_steps=training_step)
+                # if self.rank == 0:
+                #     from line_profiler import LineProfiler
+                #     lp = LineProfiler()
+                #     lp_wrapper = lp(self.get_batch)
+                #     batch = lp_wrapper()
+                #     lp.print_stats()
+                # else:
+                batch = self.get_batch(train_steps=training_step)
                 if batch is not None:
                     self.batch_buffer.push([batch])
             except:

@@ -24,7 +24,7 @@ fig = plt.figure()
 ax = fig.add_subplot(projection='3d')
 
 ens = ['DAS-TFR', 'DAS-ECS', 'DAS-PHS', 'RTS-GridZero*']
-Colors = ['r', 'g', 'b', 'y']
+Colors = ['lightcoral', 'brown', 'b', 'y']
 stas = [
     # ' ',
     '10%/30%', '20%/60%',

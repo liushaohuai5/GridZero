@@ -169,7 +169,8 @@ class LowDimFastReplayBuffer(object):
         x = time.time()
 
         if self.config.norm_type == 'mean_std':
-            ori_states = game_history.origin_state_history
+            ori_states = ray.get(game_history.origin_state_history)
+            # ori_states = game_history.origin_state_history
             if len(self.observations) < 4 * 1e3 * self.config.replay_buffer_size:
                 for i in range(ori_states.shape[0]):
                     self.observations.append(ori_states[i])
