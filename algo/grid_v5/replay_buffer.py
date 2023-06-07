@@ -311,6 +311,7 @@ class LowDimFastReplayBuffer(object):
             game_prob = game_probs[game_index]
         else:
             game_index = numpy.random.choice(len(self.buffer))
+            game_prob = 1
         game_id = self.num_played_games - len(self.buffer) + game_index
 
         return game_id, self.buffer[game_id], game_prob
@@ -339,7 +340,7 @@ class LowDimFastReplayBuffer(object):
                 game_probs.append(game_history.game_priority)
 
             game_probs = numpy.array(game_probs, dtype="float32")
-            game_probs = game_probs ** self.config.PER_alpha
+            # game_probs = game_probs ** self.config.PER_alpha
             game_probs /= numpy.sum(game_probs)
 
             game_prob_dict = dict([(game_id, prob) for game_id, prob in zip(game_id_list, game_probs)])
@@ -364,24 +365,32 @@ class LowDimFastReplayBuffer(object):
         else:
             selected_games = numpy.random.choice(list(self.buffer.keys()),
                                                  n_games//2 if self.config.efficient_imitation else n_games)
-            game_prob_dict = {}
+            # game_prob_dict = {}
+            game_prob_dict = dict([(game_id, 1.0) for game_id, game_history in self.buffer.items()])
 
         ret = []
         for i, game_id in enumerate(selected_games):
             game = self.buffer[game_id]
             game_pos, pos_prob = self.sample_position(game, force_uniform=False,
                                                       for_attacker=False if i < n_games // 2 else True)
-            ret.append((game_id, game, game_prob_dict.get(game_id), game_pos, pos_prob))
+            ret.append([game_id, self.split_game(game), game_prob_dict.get(game_id), game_pos, pos_prob])
 
         if self.config.efficient_imitation:
             selected_games = np.random.choice(list(self.expert_buffer.keys()), n_games//2)
-            game_prob_dict = {}
+            # game_prob_dict = {}
+            game_prob_dict = dict([(game_id, 1.0) for game_id, game_history in self.expert_buffer.items()])
             for game_id in selected_games:
                 game = self.expert_buffer[game_id]
                 game_pos, pos_prob = self.sample_position(game, force_uniform=True)
-                ret.append((game_id, game, game_prob_dict.get(game_id), game_pos, pos_prob))
+                ret.append([game_id, self.split_game(game), game_prob_dict.get(game_id), game_pos, pos_prob])
 
         return ret
+
+    def split_game(self, game):
+        return [game.observation_history, game.origin_state_history, game.action_history, game.attacker_action_history,
+                game.reward_history, game.reward_true_history, game.root_values,
+                game.ready_mask_history, game.closable_mask_history, game.action_high_history, game.action_low_history,
+                game.attacker_flag_history, game.priorities]
 
     def update_game_history(self, game_id, game_history):
         # The element could have been removed since its selection and update

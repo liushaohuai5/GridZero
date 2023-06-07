@@ -113,17 +113,17 @@ class RZero:
         self.batch_buffer_worker = BatchBufferFast(size=20, threshold=15)
         self.pre_buffer = BatchBufferFast(size=20, threshold=15)
 
-        self.cpu_batchworkers = [
-            BatchWorker_CPU.remote(
-                idx, self.pre_buffer, self.replay_buffer_worker, self.shared_storage, self.config
-            ) for idx in range(self.config.cpu_workers_num)
-        ]
+        # self.cpu_batchworkers = [
+        #     BatchWorker_CPU.remote(
+        #         idx, self.pre_buffer, self.replay_buffer_worker, self.shared_storage, self.config
+        #     ) for idx in range(self.config.cpu_workers_num)
+        # ]
 
         self.batch_workers = [
             LowDimFastBatchTargetWorker.remote(
                 idx, self.checkpoint, self.batch_buffer_worker,
-                # self.replay_buffer_worker,
-                self.pre_buffer,
+                self.replay_buffer_worker,
+                # self.pre_buffer,
                 self.shared_storage, self.config
             )
             for idx in range(self.config.batch_worker_num)
@@ -164,10 +164,10 @@ class RZero:
                 expert_play_worker.spin.remote() for expert_play_worker in self.expert_play_workers
             ]
 
-        [
-            cpu_worker.spin.remote()
-            for cpu_worker in self.cpu_batchworkers
-        ]
+        # [
+        #     cpu_worker.spin.remote()
+        #     for cpu_worker in self.cpu_batchworkers
+        # ]
 
         [
             batch_worker.spin.remote()

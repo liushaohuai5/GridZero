@@ -11,6 +11,7 @@ from matplotlib.patches import Patch, Circle
 sns.set()
 
 colors = ['sienna', 'darkgrey', 'lightpink', 'red', 'royalblue']
+# colors = ['#F1B056', '#92B166', 'lightpink', 'red', '#537EC0']
 
 # plt.rcParams['axes.facecolor'] = 'white'
 plt.rcdefaults()
@@ -27,12 +28,15 @@ ens = ['DAS-TFR', 'DAS-ECS', 'DAS-PHS', 'RTS-GridZero*']
 Colors = ['lightcoral', 'brown', 'b', 'y']
 stas = [
     # ' ',
-    '10%/30%', '20%/60%',
+    # '10%/30%', '20%/60%',
+    '30%', '60%',
     # '  '
 ]
 weight = {
-          '10%/30%': np.array([29.9, 257.2, 155.1, 5]),
-          '20%/60%': np.array([60.1, 514.7, 309.7, 5]),
+          # '10%/30%': np.array([29.9, 257.2, 155.1, 5]),
+          '30%': np.array([29.9, 257.2, 155.1, 5]),
+          # '20%/60%': np.array([60.1, 514.7, 309.7, 5]),
+          '60%': np.array([60.1, 514.7, 309.7, 5]),
 }
 _x = np.arange(len(ens))
 _y = np.arange(len(stas))
@@ -49,7 +53,8 @@ for ith, ista in enumerate(stas):
     ax.bar3d(x, y, bottom, width, depth, top, alpha=0.8, color=cs)
 
 ax.set_xlabel('Type', fontsize=15, labelpad=15)
-ax.set_ylabel('Retrofit level / Renewable penetration', fontsize=15, labelpad=20)
+# ax.set_ylabel('Retrofit level / Renewable penetration', fontsize=15, labelpad=20)
+ax.set_ylabel('Renewable penetration', fontsize=15, labelpad=20)
 ax.set_zlabel('Cost (Million $)', fontsize=15, labelpad=15)
 
 ax.set_xticks([0, 1, 2, 3])
@@ -57,6 +62,8 @@ ax.set_xticklabels(ens)
 ax.set_ylim(0, 2)
 ax.set_yticks([0.5, 1.5])
 ax.set_yticklabels(stas)
+ax.grid(False)
+ax.set_facecolor('white')
 plt.show()
 
 
@@ -138,9 +145,9 @@ g_data = g_data[:, :-1].astype(np.float32)
 data1 = pd.read_csv(f'./results/gridsim_v2/selected_episodes/2/data_53569.csv').values
 steps = np.asarray([i for i in range(288)])
 
-axs[0, 0].plot(steps, data1[:, 0], color='darkorange', label='Load consumption')
-axs[0, 0].plot(steps, data1[:, 2], color='mediumseagreen', label='Ground-truth renewable maximum')
-axs[0, 0].fill_between(steps_1, data[:, 2], data[:, 1], color='mediumseagreen', alpha=0.3, label='Renewable curtailment')
+axs[0, 0].plot(steps, data1[:, 0], color=colors[0], label='Load consumption')
+axs[0, 0].plot(steps, data1[:, 2], color=colors[1], label='Ground-truth renewable maximum')
+axs[0, 0].fill_between(steps_1, data[:, 2], data[:, 1], color=colors[1], alpha=0.3, label='Renewable curtailment')
 axs[0, 0].plot(steps, max_gen[settings.renewable_ids, :].sum(0), color=colors[4], linestyle='dotted',
          label='Renewable prediction with +30% errors')
 
@@ -165,27 +172,27 @@ min_gen_p = data[:, 7]
 data1 = pd.read_csv(f'./results/gridsim_v2/selected_episodes/2/data_53569.csv').values
 steps = np.asarray([i for i in range(nb_periods)])
 
-axs[0, 1].plot(steps, data1[:, 0], color='darkorange',)
+axs[0, 1].plot(steps, data1[:, 0], color=colors[0],)
 axs[0, 1].plot(steps, ori_max_gen[settings.renewable_ids].sum(0), color=colors[4], linestyle='dotted',
          label='Renewable prediction with -30% errors')
-axs[0, 1].plot(steps, data1[:, 2], color='mediumseagreen',)
+axs[0, 1].plot(steps, data1[:, 2], color=colors[1],)
 
 axs[0, 1].fill_between(steps_1, max_gen_p, min_gen_p, color=colors[4], alpha=0.3, label='Adjust capacity area')
-axs[0, 1].fill_between(steps_1, data1[:, 2], data[:, 1], color='mediumseagreen', alpha=0.3)
+axs[0, 1].fill_between(steps_1, data1[:, 2], data[:, 1], color=colors[1], alpha=0.3)
 axs[0, 1].plot(steps_1, data[:, 1], color=colors[4], linestyle='dashdot')
 axs[0, 1].set_title(f'(A2) DAS: renewable day-ahead underestimated',)
 
 
 steps = np.asarray([i for i in range(nb_periods)])
-axs[1, 1].plot(steps, g_data[:, 0], color='darkorange',
+axs[1, 1].plot(steps, g_data[:, 0], color=colors[0],
             # label='Load consumption'
             )
 
-axs[1, 1].plot(steps, g_data[:, 2], color='mediumseagreen',
+axs[1, 1].plot(steps, g_data[:, 2], color=colors[1],
             # label='Ground-truth renewable maximum'
             )
 axs[1, 1].fill_between(steps, g_data[:, 5], g_data[:, 6], color=colors[4], alpha=0.3, label='GridZero adjust capacity area')
-axs[1, 1].fill_between(steps, g_data[:, 2], g_data[:, 1], color='mediumseagreen', alpha=0.3)
+axs[1, 1].fill_between(steps, g_data[:, 2], g_data[:, 1], color=colors[1], alpha=0.3)
 axs[1, 1].plot(steps, g_data[:, 1], color=colors[4], linestyle='dashdot', label='GridZero consumption')
 axs[1, 1].set_title(f'(C) RTS-GridZero: renewable nowcasting')
 
@@ -198,7 +205,7 @@ sac_data = pd.read_csv('data_53569_sac.csv').values
 gen_status = np.array(sac_data[:, -1])
 sac_data = sac_data[:, :-1].astype(np.float32)
 gen_status_sac = np.array([[float(i) for i in gen_status[j][1:-1].split(',')] for j in range(sac_data.shape[0])])
-axs[1, 0].plot(steps, sac_data[:, 0], color='darkorange',
+axs[1, 0].plot(steps, sac_data[:, 0], color=colors[0],
             )
 
 axs[1, 0].plot(steps, sac_data[:, 2], color='mediumseagreen',
@@ -206,7 +213,7 @@ axs[1, 0].plot(steps, sac_data[:, 2], color='mediumseagreen',
             )
 
 axs[1, 0].fill_between(steps, sac_data[:, 5], sac_data[:, 6], color=colors[4], alpha=0.3, label='SAC adjust capacity area')
-axs[1, 0].fill_between(steps, sac_data[:, 2], sac_data[:, 1], color='mediumseagreen', alpha=0.3)
+axs[1, 0].fill_between(steps, sac_data[:, 2], sac_data[:, 1], color=colors[1], alpha=0.3)
 axs[1, 0].plot(steps, sac_data[:, 1], color=colors[4], linestyle='dashdot')
 axs[1, 0].set_title(f'(B) RTS-SAC: renewable nowcasting',
                         # fontsize='small'
@@ -248,9 +255,9 @@ g_data = g_data[:, :-1].astype(np.float32)
 data1 = pd.read_csv(f'./results/gridsim_v2/selected_episodes/2/data_53569.csv').values
 steps = np.asarray([i for i in range(288)])
 
-axs[0, 0].plot(steps, data1[:, 0], color='darkorange', label='Load consumption')
-axs[0, 0].plot(steps, data1[:, 2], color='mediumseagreen', label='Real renewable maximum')
-axs[0, 0].fill_between(steps_1, data[:, 2], data[:, 1], color='mediumseagreen', alpha=0.3, label='Renewable curtailment')
+axs[0, 0].plot(steps, data1[:, 0], color=colors[0], label='Load consumption')
+axs[0, 0].plot(steps, data1[:, 2], color=colors[1], label='Real renewable maximum')
+axs[0, 0].fill_between(steps_1, data[:, 2], data[:, 1], color=colors[1], alpha=0.3, label='Renewable curtailment')
 axs[0, 0].plot(steps, max_gen[settings.renewable_ids, :].sum(0), color=colors[4], linestyle='dotted',
          label='Renewable overestimation')
 
@@ -853,15 +860,28 @@ sac_scores = np.concatenate([gridzero_data[:, i] for i in range(9, 12)])
 ddpg_scores = np.concatenate([gridzero_data[:, i] for i in range(12, 15)])
 env_steps_baseline = np.concatenate([gridzero_data[:, 5] for _ in range(9, 12)])
 dc_opf_scores = 649.4 * np.ones_like(scores)
-import ipdb
-ipdb.set_trace()
 # ac_opf_scores = 690.1 * np.ones_like(scores)
 sns.lineplot(x=env_steps/1e6, y=scores, color=colors[4], label='GridZero')
 # sns.lineplot(x=env_steps/1e6, y=dc_opf_scores, color=colors[3], label='UC-ED')
 # sns.lineplot(x=env_steps/1e6, y=ac_opf_scores, color=colors[3], label='AC-UC-ED')
 sns.lineplot(x=env_steps_baseline/1e6, y=sac_scores, color=colors[1], label='SAC')
 # sns.lineplot(x=env_steps_baseline/1e6, y=ddpg_scores, color=colors[0], label='DDPG')
-plt.xlabel("env steps (million steps)", fontsize=15)
+plt.xlabel("Env steps (million steps)", fontsize=15)
+plt.ylabel("Scores", fontsize=15)
+plt.legend(
+    # types, ["DDPG", "SAC", "DC-UC-ED", "AC-UC-ED", "GridZero"],
+    loc='lower right')
+# plt.grid()
+plt.show()
+
+imitation_data = pd.read_csv('./GridZero_imitation.csv').values
+imitation_steps = [imitation_data[:, -1] for i in range(3)]
+imitation_steps = np.concatenate(imitation_steps)
+imitation_scores = [imitation_data[:, i] for i in range(-4, -1)]
+imitation_scores = np.concatenate(imitation_scores)
+sns.lineplot(x=env_steps/1e6, y=scores, color=colors[4], label="GridZero vanilla")
+sns.lineplot(x=imitation_steps/1e6, y=imitation_scores, color=colors[1], label="GridZero imitation")
+plt.xlabel("Env steps (million steps)", fontsize=15)
 plt.ylabel("Scores", fontsize=15)
 plt.legend(
     # types, ["DDPG", "SAC", "DC-UC-ED", "AC-UC-ED", "GridZero"],

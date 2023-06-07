@@ -7,8 +7,9 @@ import time
 from ray.util.queue import Queue
 from algo.grid_v5.rzero import MLPModel
 from algo.grid_v5.self_play import GameHistory
-from mcts_tree_sample.dummy import run_multi_support_adversarial
-from torch_utils import profile
+from mcts_tree_sample.dummy import run_multi_support_adversarial, run_multi_support_adversarial_gumbel
+import torch
+from torch_utils import *
 from torch.cuda.amp import autocast
 
 
@@ -96,14 +97,14 @@ class LowDimFastBatchTargetWorker:
     """
 
     def __init__(self, rank, initial_checkpoint, batch_buffer,
-                 # replay_buffer,
-                 pre_buffer,
+                 replay_buffer,
+                 # pre_buffer,
                  shared_storage, config):
         self.rank = rank
         self.config = config
         self.batch_buffer = batch_buffer
-        # self.replay_buffer = replay_buffer
-        self.pre_buffer = pre_buffer
+        self.replay_buffer = replay_buffer
+        # self.pre_buffer = pre_buffer
         self.shared_storage = shared_storage
         self.buffer = []
         self.model = MLPModel(config)
@@ -137,9 +138,16 @@ class LowDimFastBatchTargetWorker:
         """
         # print('BOOTSTRAP_CALC', observations.shape)
         root_rewards = root_rewards.squeeze()
-        root_values, root_distributions, root_actions, root_attacker_actions = run_multi_support_adversarial(
-            observations, self.model, self.config, ready_masks, closable_masks, action_highs, action_lows,
-            origin_states, train_steps=train_steps, is_attackers=is_attackers, root_rewards=root_rewards)
+        if self.config.use_gumbel:
+            root_values, root_distributions, root_actions, root_attacker_actions, ori_values, _ = run_multi_support_adversarial_gumbel(
+                observations, self.model, self.config, ready_masks, closable_masks, action_highs, action_lows,
+                origin_states, train_steps=train_steps, is_attackers=is_attackers, root_rewards=root_rewards,
+                temperature=self.config.visit_softmax_temperature_fn(train_steps)
+            )
+        else:
+            root_values, root_distributions, root_actions, root_attacker_actions, _ = run_multi_support_adversarial(
+                observations, self.model, self.config, ready_masks, closable_masks, action_highs, action_lows,
+                origin_states, train_steps=train_steps, is_attackers=is_attackers, root_rewards=root_rewards)
         values = np.array(root_values)
         actions = np.array(root_actions)
         attacker_actions = np.array(root_attacker_actions)
@@ -173,35 +181,60 @@ class LowDimFastBatchTargetWorker:
         print("start making batches...")
 
         batches = []
+        cnt = 0
         while True:
 
             training_step = ray.get(self.shared_storage.get_info.remote("training_step"))
             target_update_index = training_step // self.config.target_update_interval
-            try:
-                # x = time.time()
-                if target_update_index > self.last_target_update_index:
-                    self.last_target_update_index = target_update_index
-                    target_weights = ray.get(self.shared_storage.get_info.remote("target_weights"))
-                    self.model.set_weights(target_weights)
-                    self.model.to('cuda')
-                    self.model.eval()
-                    print("batch worker model updated !!!")
+            # try:
+            x = time.time()
+            if target_update_index > self.last_target_update_index:
+                self.last_target_update_index = target_update_index
+                target_weights = ray.get(self.shared_storage.get_info.remote("target_weights"))
+                self.model.set_weights(target_weights)
+                self.model.to('cuda')
+                self.model.eval()
+                print("batch worker model updated !!!")
 
-                # if self.rank == 0:
-                #     from line_profiler import LineProfiler
-                #     lp = LineProfiler()
-                #     lp_wrapper = lp(self.get_batch)
-                #     batch = lp_wrapper()
-                #     lp.print_stats()
-                # else:
-                batch = self.get_batch(train_steps=training_step)
-                if batch is not None:
-                    self.batch_buffer.push([batch])
-            except:
-                continue
+            # if self.rank == 0:
+            #     from line_profiler import LineProfiler
+            #     lp = LineProfiler()
+            #     lp_wrapper = lp(self.get_batch)
+            #     batch = lp_wrapper()
+            #     lp.print_stats()
+            # else:
+            batch = self.get_batch(train_steps=training_step)
+            if batch is not None:
+                self.batch_buffer.push([batch])
+            cnt += 1
+            if self.rank == 0 and cnt % 20 == 0:
+                print(f'prepare batch time:{time.time() - x:.3f}')
+            # except:
+            #     continue
                 # print(f'batchQ={self.batch_buffer.get_len()}')
-            # print(f'prepare batch time:{time.time()-x:.3f}')
+
             # time.sleep(0.2)
+
+    def concat_game(self, items):
+        observation_history, origin_state_history, action_history, \
+        attacker_action_history, reward_history, reward_true_history, root_values, \
+        ready_mask_history, closable_mask_history, \
+        action_high_history, action_low_history, attacker_flag_history, priorities = items
+        game = GameHistory()
+        game.observation_history = observation_history
+        game.origin_state_history = origin_state_history
+        game.action_history = action_history
+        game.attacker_action_history = attacker_action_history
+        game.reward_history = reward_history
+        game.reward_true_history = reward_true_history
+        game.root_values = root_values
+        game.ready_mask_history = ready_mask_history
+        game.closable_mask_history = closable_mask_history
+        game.action_high_history = action_high_history
+        game.action_low_history = action_low_history
+        game.attacker_flag_history = attacker_flag_history
+        game.priorities = priorities
+        return game
 
     # @profile
     def get_batch(self, train_steps=0):
@@ -238,12 +271,15 @@ class LowDimFastBatchTargetWorker:
              )
 
         weight_batch = [] if self.config.PER else None
-        # game_samples = ray.get(self.replay_buffer.sample_n_games_wrapper.remote(self.config.batch_size, force_uniform=False, rank=self.rank))
-        game_samples = self.pre_buffer.pop()
-        if game_samples is None:
-            return None
+        game_samples = ray.get(self.replay_buffer.sample_n_games_wrapper.remote(self.config.batch_size, force_uniform=False, rank=self.rank))
+        # game_samples = self.pre_buffer.pop()
+        # if game_samples is None:
+        #     return None
         # import ipdb
         # ipdb.set_trace()
+        for game_sample in game_samples:
+            game_sample[1] = self.concat_game(game_sample[1])
+
         n_total_samples = len(game_samples)
 
         """ 
@@ -388,10 +424,14 @@ class LowDimFastBatchTargetWorker:
             bootstrap_reward = np.array(bootstrap_reward)
 
             # x = time.time()
-            bootstrap_values, _, _, _ = self.calculate_bootstrap(bootstrap_observation, bootstrap_mask,
-                bootstrap_ready_mask, bootstrap_closable_mask, bootstrap_action_high, bootstrap_action_low,
-                bootstrap_origin_state, train_steps=train_steps, is_attackers=bootstrap_attacker_flags,
-                root_rewards=bootstrap_reward)
+            # bootstrap_values, _, _, _ = self.calculate_bootstrap(bootstrap_observation, bootstrap_mask,
+            #     bootstrap_ready_mask, bootstrap_closable_mask, bootstrap_action_high, bootstrap_action_low,
+            #     bootstrap_origin_state, train_steps=train_steps, is_attackers=bootstrap_attacker_flags,
+            #     root_rewards=bootstrap_reward)
+            bootstrap_observation = torch.from_numpy(bootstrap_observation).float().to('cuda')
+            bootstrap_values = self.model.value_obs(bootstrap_observation)
+            bootstrap_values = support_to_scalar(bootstrap_values, self.config.support_size, self.config.value_support_step)
+            bootstrap_values = bootstrap_values.detach().cpu().numpy().squeeze()
             # print(f'bootstrap time:{time.time() - x:.3f}')
 
             # Reanalyze result.
@@ -475,7 +515,12 @@ class LowDimFastBatchTargetWorker:
             )
 
             if self.config.PER:
-                weight_batch.append((n_total_samples * game_prob * pos_prob) ** (-self.config.PER_beta))
+                try:
+                    weight_batch.append((n_total_samples * game_prob * pos_prob) ** (-self.config.PER_beta))
+                except:
+                    import ipdb
+                    ipdb.set_trace()
+                    print('error')
 
         if self.config.PER:
             weight_batch = numpy.array(weight_batch, dtype="float32") / max(

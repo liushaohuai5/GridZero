@@ -54,6 +54,13 @@ class GridSimExperientConfig:
         self.is_plot = True
         self.log_pic = False
 
+        # Gumbel
+        self.use_gumbel = True
+        self.n_sim = 24
+        self.m = 14
+        self.c_visit = 50
+        self.c_scale = 0.1
+
         self.use_amp = False
         self.use_bn = False
         self.activation = nn.LeakyReLU
@@ -208,7 +215,7 @@ class GridSimExperientConfig:
         self.selfplay_model_serve_num = 4
         self.model_worker_serve_num = 2
         self.batch_worker_num = 24 if not self.only_imitate_policy else 1
-        self.cpu_workers_num = 4
+        self.cpu_workers_num = 6
         self.support_size = 200
         self.value_support_step = 0.5
         self.reward_support_size = 200
@@ -326,7 +333,7 @@ if __name__ == '__main__':
     for k, v in config.__dict__.items():
         print(k, v)
 
-    config.PER = False
+    config.PER = True
     config.AER = False
     agent = RZero(config)
     # assert len(settings.white_list_random_disconnection) + 1 == (config.mcts_num_policy_samples +

@@ -135,8 +135,7 @@ class Trainer:
             action_dim = 2 * generator_num
 
         expert_action[:, :action_dim] = expert_action[:, :action_dim].clip(-0.999, 0.999)
-        # expert_action[:, :action_dim] = torch.clamp(expert_action[:, :action_dim], -0.999, 0.999)
-        distr = SquashedNormal(expert_policy[:, :action_dim], expert_policy[:, action_dim:2 * action_dim].exp() + 5e-4)
+        distr = SquashedNormal(expert_policy[:, :action_dim], expert_policy[:, action_dim:2 * action_dim])
 
         loss = -distr.log_prob(expert_action[:, :action_dim]).sum(-1)
 
@@ -144,11 +143,6 @@ class Trainer:
                   (expert_action[:, action_dim:action_dim + one_hot_dim]).clip(0, 1)).sum(1)
         loss += -(torch.log_softmax(expert_policy[:, 2 * action_dim + one_hot_dim:], dim=1) *
                   (expert_action[:, action_dim + one_hot_dim:]).clip(0, 1)).sum(1)
-        # loss += -(torch.log_softmax(expert_policy[:, 2 * action_dim:2 * action_dim + one_hot_dim], dim=1) *
-        #           torch.clamp(expert_action[:, action_dim:action_dim + one_hot_dim] + 1e-3, 0, 1)).sum(1)
-        # loss += -(torch.log_softmax(expert_policy[:, 2 * action_dim + one_hot_dim:], dim=1) *
-        #           torch.clamp(expert_action[:, action_dim + one_hot_dim:] + 1e-3, 0, 1)).sum(1)
-        # if self.config.add_attacker:
         loss = loss * mask
 
         return loss
@@ -157,9 +151,6 @@ class Trainer:
     def loss_pi_kl_fn(self, policy, target_action, target_policy, attacker_flag):
         generator_num = self.config.generator_num
         one_hot_dim = self.config.one_hot_dim
-        # policy: [batchsize, action_dim * 2]
-        # target_action = [batch_size, n, action]
-        # target_policies = [batch_size, n]
         if self.config.parameters['only_power']:
             action_dim = generator_num
         else:
@@ -168,42 +159,12 @@ class Trainer:
 
         mask = (1 - torch.from_numpy(attacker_flag).float().to('cuda'))
 
-        # def atanh(x):
-        #     return 0.5 * (torch.log(1 + x + 1e-6) - torch.log(1 - x + 1e-6))
-
-        # if self.config.parameters['only_power']:
         target_action[:, :, :action_dim] = target_action[:, :, :action_dim].clip(-0.999, 0.999)
-        distr = SquashedNormal(policy[:, :action_dim], policy[:, action_dim:2 * action_dim].exp() + 5e-4)
-        # else:
-        #     target_action[:, :, :2*generator_num] = target_action[:, :, :2*generator_num].clip(-0.999, 0.999)
-        #     distr = SquashedNormal(policy[:, :2 * generator_num], policy[:, 2 * generator_num:4 * generator_num].exp() + 5e-4)
+        distr = SquashedNormal(policy[:, :action_dim], policy[:, action_dim:2 * action_dim])
 
-        # target_action_inverse = torch.atanh(target_action)
+        policy_log_prob = distr.log_prob(torch.moveaxis(target_action, 0, 1)[:, :, :action_dim]).sum(-1)
+        policy_log_prob = torch.moveaxis(policy_log_prob, 0, 1)
 
-        # distr = torch.distributions.Normal(policy[:, :action_dim], policy[:, action_dim:].exp()+1e-5)
-
-
-        log_probs = []
-        # max_pol_pos = torch.argmax(target_policy, dim=1)
-        # one_hot_mask = torch.nn.functional.one_hot(max_pol_pos, num_classes=n_branches).float()
-        # print('A', 'P', target_action.shape, target_policy.shape)
-        for i in range(n_branches):
-            '''
-                Modification Dec 31.
-            '''
-            # if self.config.parameters['only_power']:
-            log_prob = distr.log_prob(target_action[:, i, :action_dim]).sum(-1, keepdim=True)
-            # else:
-            #     log_prob = distr.log_prob(target_action[:, i, :2*generator_num]).sum(-1, keepdim=True)
-
-            '''
-                Original work version
-            log_prob = distr.log_prob(target_action[:, i]).sum(-1, keepdim=True)
-            '''
-
-            log_probs.append(log_prob)
-
-        policy_log_prob = torch.cat(log_probs, dim=1)
         loss = (-target_policy * policy_log_prob).sum(1)
 
         target_open_policy = (target_policy.unsqueeze(2).repeat(1, 1, one_hot_dim) * target_action[:, :, action_dim:action_dim + one_hot_dim]).sum(1).squeeze()
@@ -211,28 +172,24 @@ class Trainer:
         loss += -(torch.log_softmax(policy[:, 2 * action_dim:2 * action_dim + one_hot_dim], dim=1) * target_open_policy).sum(1)
         loss += -(torch.log_softmax(policy[:, 2 * action_dim + one_hot_dim:], dim=1) * target_close_policy).sum(1)
 
-        ent_action = distr.rsample()
+        ent_action = distr.rsample((1024,))
         ent_action = ent_action.clip(-0.999, 0.999)
         if self.config.parameters['only_power']:
             ent_log_prob = distr.log_prob(ent_action).sum(-1)
         else:
             ent_log_prob = distr.log_prob(ent_action)[:, :generator_num].sum(-1)
 
-        entropy = -ent_log_prob
+        entropy = -ent_log_prob.mean(0)
 
-        # entropy = distr.entropy().sum(-1)
-        # entropy = torch.from_numpy(np.zeros(1)).float()
         if not self.config.parameters['only_power']:
             voltage_mu, voltage_log_std = policy[:, generator_num:2*generator_num], policy[:, 3*generator_num:4*generator_num]
             mean_voltage_mu = voltage_mu.mean(-1).unsqueeze(1).repeat(1, generator_num)
             loss += torch.sum((voltage_mu - mean_voltage_mu)**2)
-        # if self.config.add_attacker:
         loss = loss * mask
         entropy = entropy * mask
 
         return loss, entropy
 
-    # def loss_pi_imitation(self, true_policy, pred_policy):
 
     def loss_attacker_pi(self, policy_attacker, target_action, target_policy, attacker_flag):
         if not self.config.attack_all:
@@ -275,6 +232,7 @@ class Trainer:
 
         # Training loop
         err_cnt = 0
+        prev_test_score = None
         while self.training_step < self.config.training_steps:
             x = time.time()
             batch = batch_buffer.pop()
@@ -293,6 +251,24 @@ class Trainer:
             x = time.time()
 
             try:
+                # if self.training_step % 20 == 0:
+                #     from line_profiler import LineProfiler
+                #     lp = LineProfiler()
+                #     lp_wrapper = lp(self.update_weights)
+                #     (
+                #         priorities,
+                #         total_loss,
+                #         value_loss,
+                #         reward_loss,
+                #         policy_loss,
+                #         attacker_policy_loss,
+                #         consistency_loss,
+                #         entropy_loss,
+                #         imitation_loss,
+                #         log_info
+                #     ) = lp_wrapper(batch)
+                #     lp.print_stats()
+                # else:
                 (
                     priorities,
                     total_loss,
@@ -338,7 +314,11 @@ class Trainer:
             if self.config.PER:
                 # Save new priorities in the replay buffer (See https://arxiv.org/abs/1803.00933)
                 # print("PRIORITIES", priorities)
-                replay_buffer.update_priorities.remote(priorities, index_batch)
+                batch_size = batch[0].shape[0]
+                if self.config.efficient_imitation:
+                    replay_buffer.update_priorities.remote(priorities[:batch_size//2], index_batch[:batch_size//2])
+                else:
+                    replay_buffer.update_priorities.remote(priorities, index_batch)
 
             shared_storage.set_info.remote(
                 {
@@ -412,7 +392,9 @@ class Trainer:
                     for i, ep in enumerate(start_sample_idx):
                         writer.add_scalar(f'Running Cost/Ep_{ep}', running_costs[i], self.training_step)
 
-                if test_episode_length is not None:
+                # if test_episode_length is not None:
+                if test_total_reward != prev_test_score:
+                    prev_test_score = test_total_reward
                     writer.add_scalar("Test/test_episode_length", test_episode_length, self.training_step)
                     writer.add_scalar("Test/test_total_reward", test_total_reward, self.training_step)
                     writer.add_scalar("Test/test_mean_value", test_mean_value, self.training_step)
@@ -682,7 +664,10 @@ class Trainer:
 
         if self.config.PER:
             # Correct PER bias by using importance-sampling (IS) weights
-            target_loss *= weight_batch
+            if self.config.efficient_imitation:
+                target_loss *= weight_batch[:batch_size//2]
+            else:
+                target_loss *= weight_batch
 
         loss = target_loss.mean() + self.config.entropy_loss_coeff * policy_entropy_loss.mean() + \
                self.config.reward_loss_coeff * reward_loss.mean() + \

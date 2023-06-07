@@ -109,6 +109,8 @@ class MLPModel(nn.Module):
         self.full_reward_support_size = 2 * config.reward_support_size + 1
         self.attacker_action_shape = config.attacker_action_dim
 
+        self.generator_num = self.config.generator_num
+
         '''
             Models
         '''
@@ -159,6 +161,9 @@ class MLPModel(nn.Module):
                                  activation=self.activation, use_bn=self.use_bn)
         self.time_step = 0
 
+        self.init_std = 0.0
+        self.min_std = 0.1
+
 
     def discrim(self, hidden, action):
         return self.dis_net(hidden, action)
@@ -176,6 +181,11 @@ class MLPModel(nn.Module):
     # @profile
     def policy_no_split(self, hidden):
         pi = self.pi_net(hidden)
+
+        generator_num = self.generator_num
+        pi[:, :generator_num] = 5 * torch.tanh(pi[:, :generator_num] / 5)  # soft clamp mu
+        pi[:, generator_num:2 * generator_num] = torch.nn.functional.softplus(pi[:, generator_num:2 * generator_num] + self.init_std) + self.min_std
+
         return pi
 
     def policy_attacker(self, hidden):
@@ -325,8 +335,10 @@ class MLPModel(nn.Module):
                                                              policy[:, 4*generator_num:4*generator_num+one_hot_dim], \
                                                              policy[4*generator_num+one_hot_dim:]
                 # sigma = torch.exp(log_std) * temperature
-                sigma = torch.exp(log_std)
-                distr = SquashedNormal(mu, sigma + 5e-4)
+                # sigma = torch.exp(log_std)
+                sigma = log_std
+                # distr = SquashedNormal(mu, sigma + 5e-4)
+                distr = SquashedNormal(mu, sigma)
 
                 if expert_policy is not None:
                     if self.config.parameters['only_power']:
@@ -339,13 +351,15 @@ class MLPModel(nn.Module):
                                                                                              policy[:, 2 * generator_num:4 * generator_num], \
                                                                                              policy[:, 4 * generator_num:4 * generator_num + one_hot_dim], \
                                                                                              policy[4 * generator_num + one_hot_dim:]
-                    expert_sigma = torch.exp(expert_log_std)
-                    expert_distr = SquashedNormal(expert_mu, expert_sigma + 5e-4)
+                    # expert_sigma = torch.exp(expert_log_std)
+                    expert_sigma = expert_log_std
+                    # expert_distr = SquashedNormal(expert_mu, expert_sigma + 5e-4)
+                    expert_distr = SquashedNormal(expert_mu, expert_sigma)
 
                 if not is_test:
                     policy_action = distr.sample(torch.Size([n_policy_action]))  # [n_pol, batchsize, a_dim]
                     policy_action = policy_action.clip(-0.999, 0.999)
-                    policy_action = torch_utils.tensor_to_numpy(policy_action.permute(1, 0, 2))
+                    policy_action = policy_action.permute(1, 0, 2)
 
                     if n_random_action > 0:
                         random_action = distr.sample(torch.Size([n_random_action//2]))  # [n_pol, batchsize, a_dim]
@@ -355,30 +369,37 @@ class MLPModel(nn.Module):
                         random_action_new = new_distr.sample(torch.Size([n_random_action//2]))
                         random_action = torch.cat((random_action, random_action_new), dim=0)
                         random_action = random_action.clip(-0.999, 0.999)
-                        random_action = torch_utils.tensor_to_numpy(random_action.permute(1, 0, 2))
+                        random_action = random_action.permute(1, 0, 2)
                     else:
                         random_action = None
 
                     if n_random_action > 0:
-                        policy_action = np.concatenate([policy_action, random_action], axis=1)
+                        policy_action = torch.cat((policy_action, random_action), dim=1)
 
                     if expert_policy is not None:
                         if n_expert_action > 0:
                             expert_action = expert_distr.sample(torch.Size([n_expert_action]))
                             expert_action = expert_action.clip(-0.999, 0.999)
-                            expert_action = torch_utils.tensor_to_numpy(expert_action.permute(1, 0, 2))
-                            policy_action = np.concatenate([policy_action, expert_action], axis=1)
+                            expert_action = expert_action.permute(1, 0, 2)
+                            policy_action = torch.cat((policy_action, expert_action), dim=1)
                 else:
                     policy_action = distr.sample(torch.Size([n_policy_action + n_random_action]))
                     policy_action = policy_action.clip(-0.999, 0.999)
-                    policy_action = torch_utils.tensor_to_numpy(policy_action.permute(1, 0, 2))
+                    policy_action = policy_action.permute(1, 0, 2)
 
                     if expert_policy is not None:
                         if n_expert_action > 0:
                             expert_action = expert_distr.sample(torch.Size([n_expert_action]))
                             expert_action = expert_action.clip(-0.999, 0.999)
-                            expert_action = torch_utils.tensor_to_numpy(expert_action.permute(1, 0, 2))
-                            policy_action = np.concatenate([policy_action, expert_action], axis=1)
+                            expert_action = expert_action.permute(1, 0, 2)
+                            policy_action = torch.cat((policy_action, expert_action), dim=1)
+
+                state = torch.from_numpy(state).float().to('cuda')
+                action_high = torch.from_numpy(action_high).float().to('cuda')
+                action_low = torch.from_numpy(action_low).float().to('cuda')
+                ready_mask = torch.from_numpy(ready_mask).float().to('cuda')
+                closable_mask = torch.from_numpy(closable_mask).float().to('cuda')
+                policy_action = policy_action.float()
 
                 modified_action = self.check_balance(
                     state,
@@ -391,47 +412,44 @@ class MLPModel(nn.Module):
                 if not is_test:
                     policy_open_one_hots_real, policy_close_one_hots_real = \
                         self.determine_open_close_one_hot(policy, n_policy_action, modified_action[:, :n_policy_action, :],
-                                                          ready_mask, closable_mask, action_high, action_low,
+                                                          ready_mask, closable_mask,
                                                           add_explore_noise=False, is_root=is_root, ori_states=state)
                     policy_open_one_hots_random, policy_close_one_hots_random = \
                         self.determine_open_close_one_hot(policy, n_random_action, modified_action[:, n_policy_action:n_policy_action+n_random_action, :],
-                                                          ready_mask, closable_mask, action_high, action_low,
+                                                          ready_mask, closable_mask,
                                                           add_explore_noise=True, is_root=is_root, ori_states=state)
                     if expert_policy is not None:
                         policy_open_one_hots_expert, policy_close_one_hots_expert = self.determine_open_close_one_hot(
                             expert_policy, n_expert_action, modified_action[:, n_policy_action+n_random_action:, :],
-                            ready_mask, closable_mask, action_high, action_low,
+                            ready_mask, closable_mask,
                             add_explore_noise=False, is_root=is_root, ori_states=state)
-                        policy_open_one_hots = np.concatenate((policy_open_one_hots_real, policy_open_one_hots_random, policy_open_one_hots_expert),
-                                                              axis=1)
-                        policy_close_one_hots = np.concatenate(
-                            (policy_close_one_hots_real, policy_close_one_hots_random, policy_close_one_hots_expert), axis=1)
+                        policy_open_one_hots = torch.cat((policy_open_one_hots_real, policy_open_one_hots_random, policy_open_one_hots_expert), dim=1)
+                        policy_close_one_hots = torch.cat((policy_close_one_hots_real, policy_close_one_hots_random, policy_close_one_hots_expert), dim=1)
                     else:
-                        policy_open_one_hots = np.concatenate((policy_open_one_hots_real, policy_open_one_hots_random), axis=1)
-                        policy_close_one_hots = np.concatenate((policy_close_one_hots_real, policy_close_one_hots_random), axis=1)
+                        policy_open_one_hots = torch.cat((policy_open_one_hots_real, policy_open_one_hots_random), dim=1)
+                        policy_close_one_hots = torch.cat((policy_close_one_hots_real, policy_close_one_hots_random), dim=1)
 
-                    modified_action = np.concatenate((modified_action, policy_open_one_hots, policy_close_one_hots),
-                                                     axis=2)
+                    modified_action = torch.cat((modified_action, policy_open_one_hots, policy_close_one_hots),
+                                                     dim=2)
                 else:
                     policy_open_one_hots, policy_close_one_hots = \
                         self.determine_open_close_one_hot(policy, n_policy_action+n_random_action,
                                                           modified_action[:, :n_policy_action+n_random_action, :],
-                                                          ready_mask, closable_mask, action_high, action_low,
+                                                          ready_mask, closable_mask,
                                                           add_explore_noise=False, is_root=is_root, ori_states=state)
                     if expert_policy is not None:
                         policy_open_one_hots_expert, policy_close_one_hots_expert = self.determine_open_close_one_hot(
                             expert_policy, n_expert_action, modified_action[:, n_policy_action + n_random_action:, :],
-                            ready_mask, closable_mask, action_high, action_low,
+                            ready_mask, closable_mask,
                             add_explore_noise=False, is_root=is_root, ori_states=state)
-                        policy_open_one_hots = np.concatenate((policy_open_one_hots, policy_open_one_hots_expert), axis=1)
-                        policy_close_one_hots = np.concatenate((policy_close_one_hots, policy_close_one_hots_expert), axis=1)
+                        policy_open_one_hots = torch.cat((policy_open_one_hots, policy_open_one_hots_expert), dim=1)
+                        policy_close_one_hots = torch.cat((policy_close_one_hots, policy_close_one_hots_expert), dim=1)
 
-                    modified_action = np.concatenate((modified_action, policy_open_one_hots, policy_close_one_hots), axis=2)
+                    modified_action = torch.cat((modified_action, policy_open_one_hots, policy_close_one_hots), dim=2)
 
                 modified_action = self.check_balance_round2(state, modified_action, action_high, action_low,
                                                             ready_mask, closable_mask)
-
-                return modified_action
+                return modified_action.detach().cpu().numpy()
 
             elif config.explore_type == 'reject':
                 assert False, 'Not implemented'
@@ -443,17 +461,19 @@ class MLPModel(nn.Module):
                 mu, log_std = policy[:, :generator_num], policy[:, generator_num:2*generator_num]
             else:
                 mu, log_std = policy[:, :2*generator_num], policy[:, 2*generator_num:4*generator_num]
-            sigma = torch.exp(log_std)
-            distr = SquashedNormal(mu, sigma + 5e-4)
+            # sigma = torch.exp(log_std)
+            sigma = log_std
+            # distr = SquashedNormal(mu, sigma + 5e-4)
+            distr = SquashedNormal(mu, sigma)
             policy_action = distr.sample(torch.Size([n_policy_action + n_random_action + n_expert_action]))  # [n_pol, batchsize, a_dim]
             policy_action = policy_action.clip(-0.999, 0.999)
-            policy_action = torch_utils.tensor_to_numpy(policy_action.permute(1, 0, 2))
+            policy_action = policy_action.permute(1, 0, 2)
 
             policy_open_one_hots, policy_close_one_hots = self.determine_open_close_one_hot(
                 policy, n_policy_action+n_random_action+n_expert_action, add_explore_noise=False, is_root=is_root)
-            policy_action = np.concatenate((policy_action, policy_open_one_hots, policy_close_one_hots), axis=2)
+            policy_action = torch.cat((policy_action, policy_open_one_hots, policy_close_one_hots), dim=2)
 
-            return policy_action
+            return policy_action.detach().cpu().numpy()
 
 
     def eval_q(self, obs, actions, attacker_actions, prev_r, to_plays=None):
@@ -585,19 +605,19 @@ class MLPModel(nn.Module):
         self.load_state_dict(weights)
 
     def initial_inference(self, observation):
-        # with autocast():
-        h = self.encode(observation)
-        pi = self.policy_no_split(h)
-        attacker_pi = self.policy_attacker(h)
-        if self.config.efficient_imitation:
-            pi = torch.cat((pi, self.expert(h)), dim=-1)
-        value = self.value(h)
+        with autocast():
+            h = self.encode(observation)
+            pi = self.policy_no_split(h)
+            attacker_pi = self.policy_attacker(h)
+            if self.config.efficient_imitation:
+                pi = torch.cat((pi, self.expert(h)), dim=-1)
+            value = self.value(h)
 
-        # reward equal to 0 for consistency
-        reward = (torch.zeros(1, self.full_reward_support_size)
-                  .scatter(1, torch.tensor([[self.full_reward_support_size // 2]]).long(), 1.0)
-                  .repeat(len(observation), 1)
-                  .to(observation.device))
+            # reward equal to 0 for consistency
+            reward = (torch.zeros(1, self.full_reward_support_size)
+                      .scatter(1, torch.tensor([[self.full_reward_support_size // 2]]).long(), 1.0)
+                      .repeat(len(observation), 1)
+                      .to(observation.device))
 
         return (value, reward, pi, attacker_pi, h)
 
@@ -606,100 +626,90 @@ class MLPModel(nn.Module):
 
     # @profile
     def determine_open_close_one_hot(self, policy, num, modified_action=None, ready_masks=None, closable_masks=None,
-                                     action_highs=None, action_lows=None, add_explore_noise=False, is_root=False, ori_states=None):
+                                     add_explore_noise=False, is_root=False, ori_states=None):
+        batch_size = policy.shape[0]
         generator_num = self.config.generator_num
         one_hot_dim = self.config.one_hot_dim
         if ready_masks is not None:
-            ready_masks = np.concatenate((ready_masks[:, settings.thermal_ids], ready_masks[:, -1:]), axis=1)
-            closable_masks = np.concatenate((closable_masks[:, settings.thermal_ids], closable_masks[:, -1:]), axis=1)
+            ready_masks = torch.cat((ready_masks[:, settings.thermal_ids], ready_masks[:, -1:]), dim=1)
+            closable_masks = torch.cat((closable_masks[:, settings.thermal_ids], closable_masks[:, -1:]), dim=1)
             if not self.config.parameters['only_power']:
-                ready_masks = np.concatenate((ready_masks[:, :generator_num], ready_masks[:, -1:]), axis=1)
-                closable_masks = np.concatenate((closable_masks[:, :generator_num], closable_masks[:, -1:]), axis=1)
-            ready_masks = np.expand_dims(ready_masks, axis=1).repeat(num, axis=1)
-            closable_masks = np.expand_dims(closable_masks, axis=1).repeat(num, axis=1)
+                ready_masks = torch.cat((ready_masks[:, :generator_num], ready_masks[:, -1:]), dim=1)
+                closable_masks = torch.cat((closable_masks[:, :generator_num], closable_masks[:, -1:]), dim=1)
+            ready_masks = ready_masks.unsqueeze(1).repeat(1, num, 1)
+            closable_masks = closable_masks.unsqueeze(1).repeat(1, num, 1)
         if ori_states is not None:
             delta_load_p = ori_states[:, 0]
             balance_up_redundency = ori_states[:, -1]
             balance_down_redundency = ori_states[:, -2]
             addition = 20
-            redundency_adjust = -(1 - np.sign(balance_up_redundency)) / 2 * (
-                        balance_up_redundency - addition) + \
-                                (1 - np.sign(balance_down_redundency)) / 2 * (
-                                            balance_down_redundency - addition)
+            redundency_adjust = -(1 - torch.sign(balance_up_redundency)) / 2 * (balance_up_redundency - addition) + \
+                                (1 - torch.sign(balance_down_redundency)) / 2 * (balance_down_redundency - addition)
 
-            # real_actions = np.zeros_like(modified_action)
-            # for i in range(modified_action.shape[1]):
-            #     real_actions[:, i, :] = self.modify_policy(torch.from_numpy(modified_action[:, i, :]),
-            #                                                torch.from_numpy(ready_masks[:, i, :]).squeeze(1),
-            #                                                torch.from_numpy(closable_masks[:, i, :]).squeeze(1),
-            #                                                torch.from_numpy(action_highs),
-            #                                                torch.from_numpy(action_lows)
-            #                                                    ).detach().cpu().numpy()
-            # modified_action = copy.deepcopy(real_actions)
-            modified_action = np.concatenate((modified_action[:, :, :settings.balanced_id],
-                                              np.zeros_like(modified_action[:, :, :settings.balanced_id])[:, :, 0:1],
-                                              modified_action[:, :, settings.balanced_id:]), axis=2)
+            modified_action = torch.cat((modified_action[:, :, :settings.balanced_id],
+                                              torch.zeros_like(modified_action[:, :, :settings.balanced_id])[:, :, 0:1],
+                                              modified_action[:, :, settings.balanced_id:]), dim=2)
 
             if self.config.parameters['only_power']:
-                delta = np.expand_dims(delta_load_p, axis=1).repeat(num, axis=1) - \
+                delta = delta_load_p.unsqueeze(1).repeat(1, num) - \
                         modified_action.sum(2) + \
-                        np.expand_dims(redundency_adjust, axis=1).repeat(num, axis=1)
+                        redundency_adjust.unsqueeze(1).repeat(1, num)
             else:
-                delta = np.expand_dims(delta_load_p, axis=1).repeat(num, axis=1) - \
+                delta = delta_load_p.unsqueeze(1).repeat(1, num, 1) - \
                         modified_action[:, :, :generator_num].sum(2) + \
-                        np.expand_dims(redundency_adjust, axis=1).repeat(num, axis=1)
+                        redundency_adjust.unsqueeze(1).repeat(1, num, 1)
 
-            # print(f'determine delta={delta}, max={np.max(np.abs(delta)):.3f}, min={np.min(np.abs(delta)):.3f}')
+            # print(f'determine delta={delta}, max={torch.max(torch.abs(delta)):.3f}, min={torch.min(torch.abs(delta)):.3f}')
             # import ipdb
             # ipdb.set_trace()
+
+            delta = delta.unsqueeze(2).repeat(1, 1, one_hot_dim)
+
             gen_q = ori_states[:, -289:-235]
-            min_gen_q = settings.min_gen_q
-            max_gen_q = settings.max_gen_q
-            q_overload = (gen_q / max_gen_q > 1.0).astype(np.float32)
-            q_underload = (gen_q / min_gen_q < 1.0).astype(np.float32)
-            nextstep_renewable_gen_p_max = np.expand_dims(ori_states[:, -20:-2], axis=1).repeat(num, axis=1)
+            # min_gen_q = settings.min_gen_q
+            # max_gen_q = settings.max_gen_q
+            # q_overload = (gen_q / max_gen_q > 1.0).float()
+            # q_underload = (gen_q / min_gen_q < 1.0).float()
+            nextstep_renewable_gen_p_max = ori_states[:, -20:-2].unsqueeze(1).repeat(1, num, 1)
             gen_p = ori_states[:, 1:55]
             load_p = ori_states[:, 55:55+91]
-            next_load_p = np.expand_dims(ori_states[:, 55+91:55+91+91], axis=1).repeat(num, axis=1)
-            renewable_gen_p = np.expand_dims(gen_p[:, settings.renewable_ids], axis=1).repeat(num, axis=1) + modified_action[:, :, settings.renewable_ids]
+            next_load_p = ori_states[:, 55+91:55+91+91].unsqueeze(1).repeat(1, num, 1)
+            renewable_gen_p = gen_p[:, settings.renewable_ids].unsqueeze(1).repeat(1, num, 1) + modified_action[:, :, settings.renewable_ids]
             renewable_consump_rate = renewable_gen_p.sum(-1) / nextstep_renewable_gen_p_max.sum(-1)
             sum_renewable_up_redundency = nextstep_renewable_gen_p_max.sum(-1) - renewable_gen_p.sum(-1)
 
-            expand_gen_p = np.expand_dims(gen_p, axis=1).repeat(num, axis=1)
-            running_cost = calc_running_cost_rew(expand_gen_p, is_real=True)
-            open_action_low = np.zeros_like(modified_action)
+            expand_gen_p = gen_p.unsqueeze(1).repeat(1, num, 1)
+            # running_cost = calc_running_cost_rew(expand_gen_p, is_real=True)
+            open_action_low = torch.zeros_like(modified_action)
             open_action_low[:, :, settings.renewable_ids] = nextstep_renewable_gen_p_max
             action_low = ori_states[:, -91:-38]
-            tmp = np.expand_dims(np.expand_dims(np.array((settings.max_gen_p[settings.balanced_id]+settings.min_gen_p[settings.balanced_id])/2-80), axis=0), axis=0).repeat(ori_states.shape[0], axis=0)
-            action_low = np.concatenate((action_low[:, :settings.balanced_id], tmp, action_low[:, settings.balanced_id:]), axis=1)
-            action_low = np.expand_dims(action_low, axis=1).repeat(num, axis=1)
-            open_action_low[:, :, settings.thermal_ids] = np.expand_dims(gen_p[:, settings.thermal_ids], axis=1).repeat(num, axis=1) + action_low[:, :, settings.thermal_ids]
-            open_action_low[:, :, settings.balanced_id] = np.expand_dims(gen_p[:, settings.balanced_id], axis=1).repeat(num, axis=1) + action_low[:, :, settings.balanced_id]
+            # tmp = np.expand_dims(np.expand_dims(np.array((settings.max_gen_p[settings.balanced_id]+settings.min_gen_p[settings.balanced_id])/2-80), axis=0), axis=0).repeat(ori_states.shape[0], axis=0)
+            tmp = np.array((settings.max_gen_p[settings.balanced_id]+settings.min_gen_p[settings.balanced_id])/2-80)
+            tmp = torch.from_numpy(tmp).float().unsqueeze(0).repeat(batch_size, 1).to('cuda')
+            action_low = torch.cat((action_low[:, :settings.balanced_id], tmp, action_low[:, settings.balanced_id:]), dim=1)
+            action_low = action_low.unsqueeze(1).repeat(1, num, 1)
+            open_action_low[:, :, settings.thermal_ids] = gen_p[:, settings.thermal_ids].unsqueeze(1).repeat(1, num, 1) + action_low[:, :, settings.thermal_ids]
+            open_action_low[:, :, settings.balanced_id:settings.balanced_id+1] = \
+                gen_p[:, settings.balanced_id:settings.balanced_id+1].unsqueeze(1).repeat(1, num, 1) + \
+                action_low[:, :, settings.balanced_id:settings.balanced_id+1]
 
-            close_mask = ((delta < -40).astype(np.float32)
-                          + (renewable_consump_rate < 0.6 + 0.3 * random.random()).astype(np.float32)
-                          # + (next_load_p.sum(-1) - open_action_low.sum(-1) < 80)
-                          # + (sum_renewable_up_redundency > 100).astype(np.float32)
-                          # + (np.expand_dims(balance_down_redundency, axis=1).repeat(num, axis=1) < -20).astype(np.float32)
-                          # + (q_underload.sum(-1) > 0).astype(np.float32)
-                          ) * (closable_masks.sum(-1) > 0).astype(np.float32) #* (ready_masks.sum(-1) > 0).astype(np.float32)
-            close_mask = (close_mask > 0).astype(np.float32)
-            open_mask = ((delta > 40).astype(np.float32)
-                         # + (np.expand_dims(balance_up_redundency, axis=1).repeat(num, axis=1) < -20).astype(np.float32)
-                         # + (np.expand_dims(delta_load_p, axis=1).repeat(num, axis=1) > 150).astype(np.float32)
-                         # + (running_cost < -0.5).astype(np.float32)
+            close_mask = ((delta < -40).float()
+                          + (renewable_consump_rate < 0.6 + 0.3 * random.random()).unsqueeze(2).repeat(1, 1, one_hot_dim).float()
+                          # + (next_load_p.sum(-1) - open_action_low.sum(-1) < 80).unsqueeze(2).repeat(1, 1, one_hot_dim).float()
+                          + (sum_renewable_up_redundency > 100).unsqueeze(2).repeat(1, 1, one_hot_dim).float()
+                          # + (balance_down_redundency.unsqueeze(1).repeat(1, num, 1) < -20).float()
+                          # + (q_underload.sum(-1) > 0).float()
+                          ) #* (closable_masks.sum(-1, keepdims=True).repeat(1, 1, one_hot_dim) > 0).float() #* (ready_masks.sum(-1) > 0).float()
+            close_mask = (close_mask > 0).float()
+            open_mask = ((delta > 40).float()
+                         # + (balance_up_redundency.unsqueeze(1).repeat(1, num, 1) < -20).float()
+                         # + (delta_load_p.unsqueeze(1).repeat(1, num, 1) > 150).float()
+                         # + (running_cost < -0.5).float()
                          # + (next_load_p.sum(-1) - open_action_low.sum(-1) < 30) * (closable_masks.sum(-1) == 0)
-                         # + (q_overload.sum(-1) > 0).astype(np.float32)
-                         ) * (ready_masks.sum(-1) > 0).astype(np.float32)
-            open_mask, close_mask = torch.from_numpy(open_mask).float().to('cuda'), torch.from_numpy(close_mask).float().to('cuda')
-            open_mask = open_mask.unsqueeze(2)
-            close_mask = close_mask.unsqueeze(2)
-            open_mask = open_mask.repeat(1, 1, one_hot_dim)
-            close_mask = close_mask.repeat(1, 1, one_hot_dim)
+                         # + (q_overload.sum(-1) > 0).float()
+                         ) #* (ready_masks.sum(-1, keepdims=True).repeat(1, 1, one_hot_dim) > 0).float()
 
         if ready_masks is not None:
-            ready_masks = torch.from_numpy(ready_masks).float().to('cuda')
-            closable_masks = torch.from_numpy(closable_masks).float().to('cuda')
             restricted_ready_masks = copy.deepcopy(ready_masks)
             restricted_ready_masks[:, :, -1] = 0
             restricted_closable_masks = copy.deepcopy(closable_masks)
@@ -715,20 +725,20 @@ class MLPModel(nn.Module):
                                                      policy[:, 4 * generator_num:4*generator_num+one_hot_dim], \
                                                      policy[:, 4*generator_num+one_hot_dim:]
 
-        min_gen_p = np.append(np.asarray(settings.min_gen_p)[settings.thermal_ids], 0)
-        min_gen_p = np.expand_dims(min_gen_p, axis=0).repeat(policy.shape[0], axis=0)
-        min_gen_p = np.expand_dims(min_gen_p, axis=1).repeat(num, axis=1)
+        min_gen_p = torch.from_numpy(np.append(np.asarray(settings.min_gen_p)[settings.thermal_ids], 0)).float().to('cuda')
+        min_gen_p = min_gen_p.unsqueeze(0).repeat(batch_size, 1)
+        min_gen_p = min_gen_p.unsqueeze(1).repeat(1, num, 1)
+
+        open_logits = open_logits.unsqueeze(1).repeat(1, num, 1)
+        close_logits = close_logits.unsqueeze(1).repeat(1, num, 1)
+
         if ori_states is not None:
-            open_factor = F.softmax(torch.from_numpy(-np.abs(min_gen_p - np.expand_dims(delta, axis=2).repeat(min_gen_p.shape[2], axis=2))).float().to('cuda')/80, dim=2)*50
-            close_factor = F.softmax(torch.from_numpy(-np.abs(min_gen_p + np.expand_dims(delta, axis=2).repeat(min_gen_p.shape[2], axis=2))).float().to('cuda')/80, dim=2)*50
+            open_factor = F.softmax(-torch.abs(min_gen_p - delta) / 80, dim=2) * 50
+            close_factor = F.softmax(-torch.abs(min_gen_p + delta) / 80, dim=2) * 50
             open_close_factor = torch.cat((open_factor, close_factor), dim=0)
-            # open_close_factor[:, :, settings.renewable_ids] = 1
-            # open_close_factor[:, :, settings.balanced_id] = 1
         else:
             open_close_factor = torch.ones((min_gen_p.shape[0], min_gen_p.shape[1], min_gen_p.shape[2])).float().to('cuda')
             open_close_factor = open_close_factor.repeat(2, 1, 1)
-        open_logits = open_logits.unsqueeze(1).repeat(1, num, 1)
-        close_logits = close_logits.unsqueeze(1).repeat(1, num, 1)
 
         if add_explore_noise:
             if self.config.parameters['only_power']:
@@ -739,6 +749,8 @@ class MLPModel(nn.Module):
 
             priors = F.softmax(torch.cat((open_logits, close_logits), dim=0), dim=2)
             priors = priors * (1 - frac) + noises * frac
+            if ori_states is not None:
+                priors *= torch.cat((ready_masks, closable_masks), dim=0)
             priors *= open_close_factor
             one_hots = F.gumbel_softmax(priors, hard=True, dim=2)
             open_one_hots, close_one_hots = one_hots[:one_hots.shape[0] // 2], one_hots[one_hots.shape[0] // 2:]
@@ -753,6 +765,8 @@ class MLPModel(nn.Module):
 
         else:
             priors = F.softmax(torch.cat((open_logits, close_logits), dim=0), dim=2)
+            if ori_states is not None:
+                priors *= torch.cat((ready_masks, closable_masks), dim=0)
             priors *= open_close_factor
             _, ids = torch.max(priors, dim=2)
             one_hots = F.one_hot(ids, num_classes=one_hot_dim).float()
@@ -770,16 +784,16 @@ class MLPModel(nn.Module):
         if is_root:
             open_one_hots *= ready_masks
             close_one_hots *= closable_masks
-            # open_real_mask = np.expand_dims((delta > 10).astype(np.float32), axis=2).repeat(open_one_hots.shape[-1], axis=2)
-            # close_real_mask = np.expand_dims((delta < -10).astype(np.float32), axis=2).repeat(open_one_hots.shape[-1], axis=2)
-            # close_one_hots = close_one_hots * torch.from_numpy((1 - open_real_mask)).float().to('cuda')
-            # open_one_hots = open_one_hots * torch.from_numpy((1 - close_real_mask)).float().to('cuda')
+        #     # open_real_mask = np.expand_dims((delta > 10).astype(np.float32), axis=2).repeat(open_one_hots.shape[-1], axis=2)
+        #     # close_real_mask = np.expand_dims((delta < -10).astype(np.float32), axis=2).repeat(open_one_hots.shape[-1], axis=2)
+        #     # close_one_hots = close_one_hots * torch.from_numpy((1 - open_real_mask)).float().to('cuda')
+        #     # open_one_hots = open_one_hots * torch.from_numpy((1 - close_real_mask)).float().to('cuda')
             sum_open_one_hots = open_one_hots[:, :, :-1].sum(2)
             open_one_hots[:, :, -1] = 1 - sum_open_one_hots
             sum_close_one_hots = close_one_hots[:, :, :-1].sum(2)
             close_one_hots[:, :, -1] = 1 - sum_close_one_hots
 
-        return open_one_hots.cpu().numpy(), close_one_hots.cpu().numpy()
+        return open_one_hots, close_one_hots
 
 
     def modify_policy(self, action, ready_masks, closable_masks, action_high, action_low, is_test=False):
@@ -800,91 +814,79 @@ class MLPModel(nn.Module):
 
         generator_num = self.config.generator_num
         one_hot_dim = self.config.one_hot_dim
+        batch_size = state.shape[0]
+        num = sampled_actions.shape[1]
 
         addition = 20
         tmp = 20
-        redundency_adjust = -(1 - np.sign(balance_up_redundency)) / 2 * (balance_up_redundency
+        redundency_adjust = -(1 - torch.sign(balance_up_redundency)) / 2 * (balance_up_redundency
                                                                                     - tmp
                                                                                     # - tmp * random.random()
                                                                                     ) + \
-                            (1 - np.sign(balance_down_redundency)) / 2 * (balance_down_redundency
+                            (1 - torch.sign(balance_down_redundency)) / 2 * (balance_down_redundency
                                                                                     - tmp
                                                                                      # - tmp * random.random()
                                                                                      )
 
-        mask = ((action_high != 0).astype(np.float32) + (action_low != 0).astype(np.float32)) * \
+        mask = ((action_high != 0).float() + (action_low != 0).float()) * \
                (1 - closable_mask[:, :-1]) * \
                (1 - ready_mask[:, :-1])     # represent adjustable generators
-        # thermal_mask = np.zeros_like(mask)
+        # thermal_mask = torch.zeros_like(mask)
         # thermal_mask[:, settings.thermal_ids] = 1
         # mask *= thermal_mask  # only readjust thermal units
-        mask = (mask > 0).astype(np.float32)
+        mask = (mask > 0).float()
         if not self.config.parameters['only_power']:
-            power_mask = np.zeros_like(action_high)
+            power_mask = torch.zeros_like(action_high)
             power_mask[:, :generator_num] = 1   # represent active power control dimensions
             mask *= power_mask
-        inv_mask = np.ones_like(mask) - mask  # represent non-adjustable generators, voltage control, closed or balance or open_gen_logit
+        # inv_mask = torch.ones_like(mask) - mask  # represent non-adjustable generators, voltage control, closed or balance or open_gen_logit
 
         if norm_action:
-            real_actions = np.zeros_like(sampled_actions)
+            real_actions = torch.zeros_like(sampled_actions)
             for i in range(sampled_actions.shape[1]):
-                real_actions[:, i, :] = self.modify_policy(torch.from_numpy(sampled_actions[:, i, :]),
-                                                              torch.from_numpy(ready_mask),
-                                                              torch.from_numpy(closable_mask),
-                                                              torch.from_numpy(action_high),
-                                                              torch.from_numpy(action_low)
-                                                              ).detach().cpu().numpy()
+                real_actions[:, i, :] = self.modify_policy(sampled_actions[:, i, :],
+                                                           ready_mask,
+                                                           closable_mask,
+                                                           action_high,
+                                                           action_low)
         else:
             real_actions = sampled_actions
 
         if self.config.parameters['only_power']:
-            delta = np.expand_dims(delta_load_p, axis=1).repeat(real_actions.shape[1], axis=1) - \
+            delta = delta_load_p.unsqueeze(1).repeat(1, num) - \
                     real_actions.sum(2) + \
-                    np.expand_dims(redundency_adjust, axis=1).repeat(real_actions.shape[1], axis=1)
+                    redundency_adjust.unsqueeze(1).repeat(1, num)
         else:
-            delta = np.expand_dims(delta_load_p, axis=1).repeat(real_actions.shape[1], axis=1) - \
+            delta = delta_load_p.unsqueeze(1).repeat(1, num, 1) - \
                     real_actions[:, :, :generator_num].sum(2) + \
-                    np.expand_dims(redundency_adjust, axis=1).repeat(real_actions.shape[1], axis=1)
+                    redundency_adjust.unsqueeze(1).repeat(1, num, 1)
 
-        # print(f'check bal delta={delta}, max={np.max(np.abs(delta)):.3f}, min={np.min(np.abs(delta)):.3f}')
+        # print(f'check bal delta={delta}, max={torch.max(torch.abs(delta)):.3f}, min={torch.min(torch.abs(delta)):.3f}')
         # import ipdb
         # ipdb.set_trace()
-        change_mask = (np.abs(delta) > 30).astype(np.float32)
-        real_actions = np.concatenate((real_actions[:, :, :settings.balanced_id],
-                                       np.zeros_like(real_actions[:, :, :settings.balanced_id])[:, :, 0:1],
-                                       real_actions[:, :, settings.balanced_id:]), axis=2)
-        change_mask = np.expand_dims(change_mask, axis=2).repeat(real_actions.shape[2], axis=2)
+        change_mask = (torch.abs(delta) > 30)
+        real_actions = torch.cat((
+            real_actions[:, :, :settings.balanced_id],
+            torch.zeros_like(real_actions[:, :, :settings.balanced_id])[:, :, 0:1],
+            real_actions[:, :, settings.balanced_id:]
+        ), dim=2)
+        change_mask = change_mask.unsqueeze(2).repeat(1, 1, real_actions.shape[2])
+        delta = delta.unsqueeze(2).repeat(1, 1, real_actions.shape[2])
+        action_high = action_high.unsqueeze(1).repeat(1, num, 1)
+        action_low = action_low.unsqueeze(1).repeat(1, num, 1)
+        mask = mask.unsqueeze(1).repeat(1, num, 1)
 
-        upgrade_redundency = (np.expand_dims(action_high, axis=1).repeat(real_actions.shape[1], axis=1) - real_actions) * \
-                             np.expand_dims(mask, axis=1).repeat(real_actions.shape[1], axis=1)
-        downgrade_redundency = (real_actions - np.expand_dims(action_low, axis=1).repeat(real_actions.shape[1], axis=1)) * \
-                               np.expand_dims(mask, axis=1).repeat(real_actions.shape[1], axis=1)
-        modification = (1 + np.sign(np.expand_dims(delta, axis=2).repeat(upgrade_redundency.shape[-1], axis=2))) / 2 * \
-                       np.expand_dims(delta, axis=2).repeat(upgrade_redundency.shape[-1], axis=2) * upgrade_redundency / (
-                                   np.expand_dims(upgrade_redundency.sum(2), axis=2).repeat(upgrade_redundency.shape[-1], axis=2) + 1e-3) + \
-                       (1 - np.sign(np.expand_dims(delta, axis=2).repeat(downgrade_redundency.shape[-1], axis=2))) / 2 * \
-                       np.expand_dims(delta, axis=2).repeat(downgrade_redundency.shape[-1], axis=2) * downgrade_redundency / (
-                                   np.expand_dims(downgrade_redundency.sum(2), axis=2).repeat(downgrade_redundency.shape[-1], axis=2) + 1e-3)
+        upgrade_redundency = (action_high - real_actions) * mask
+        downgrade_redundency = (real_actions - action_low) * mask
+
+        upgrade_redundency_sum = upgrade_redundency.sum(2, keepdims=True).repeat(1, 1, upgrade_redundency.shape[-1])
+        downgrade_redundency_sum = downgrade_redundency.sum(2, keepdims=True).repeat(1, 1, downgrade_redundency.shape[-1])
+
+        modification = (1 + torch.sign(delta)) / 2 * delta * upgrade_redundency / (upgrade_redundency_sum + 1e-3) + \
+                       (1 - torch.sign(delta)) / 2 * delta * downgrade_redundency / (downgrade_redundency_sum + 1e-3)
 
         real_actions += modification * change_mask
-        # real_actions += modification * change_mask * power_mask
-        # print(np.expand_dims(delta_load_p, axis=1).repeat(real_actions.shape[1], axis=1) - \
-        #             real_actions.sum(2) + \
-        #             np.expand_dims(redundency_adjust, axis=1).repeat(real_actions.shape[1], axis=1))
-
-        # if not norm_action:
-        #     return real_actions.squeeze()
-        #
-        # modified_sampled_actions = (real_actions - np.expand_dims(action_low, axis=1).repeat(real_actions.shape[1], axis=1)) / \
-        #                            (np.expand_dims(action_high, axis=1).repeat(real_actions.shape[1], axis=1) -
-        #                             np.expand_dims(action_low, axis=1).repeat(real_actions.shape[1], axis=1) + 1e-3) * 2 - 1
-        #
-        # modified_sampled_actions = modified_sampled_actions * np.expand_dims(mask, axis=1).repeat(real_actions.shape[1], axis=1) + \
-        #                            sampled_actions * np.expand_dims(inv_mask, axis=1).repeat(real_actions.shape[1], axis=1)
-        #
-        # modified_sampled_actions = modified_sampled_actions.clip(-0.999, 0.999)
-        # return modified_sampled_actions
-        real_actions = np.concatenate((real_actions[:, :, :settings.balanced_id], real_actions[:, :, settings.balanced_id+1:]), axis=2)
+        real_actions = torch.cat((real_actions[:, :, :settings.balanced_id], real_actions[:, :, settings.balanced_id+1:]), dim=2)
         return real_actions
 
 
@@ -895,96 +897,75 @@ class MLPModel(nn.Module):
 
         generator_num = self.config.generator_num
         one_hot_dim = self.config.one_hot_dim
+        batch_size = state.shape[0]
+        num = sampled_actions.shape[1]
+
         open_one_hot = sampled_actions[:, :, generator_num:generator_num+one_hot_dim]
         close_one_hot = sampled_actions[:, :, generator_num+one_hot_dim:]
 
         addition = 20
         tmp = 20
-        redundency_adjust = -(1 - np.sign(balance_up_redundency)) / 2 * (balance_up_redundency - tmp) + \
-                            (1 - np.sign(balance_down_redundency)) / 2 * (balance_down_redundency - tmp)
-        mask = ((action_high != 0).astype(np.float32) + (action_low != 0).astype(np.float32)) * \
+        redundency_adjust = -(1 - torch.sign(balance_up_redundency)) / 2 * (balance_up_redundency - tmp) + \
+                            (1 - torch.sign(balance_down_redundency)) / 2 * (balance_down_redundency - tmp)
+        mask = ((action_high != 0).float() + (action_low != 0).float()) * \
                (1 - closable_mask[:, :-1]) * \
                (1 - ready_mask[:, :-1])     # represent adjustable generators
-        # thermal_mask = np.zeros_like(mask)
+        # thermal_mask = torch.zeros_like(mask)
         # thermal_mask[:, settings.thermal_ids] = 1
         # mask *= thermal_mask    # only readjust thermal units
-        mask = (mask > 0).astype(np.float32)
+        mask = (mask > 0).float()
         if not self.config.parameters['only_power']:
-            power_mask = np.zeros_like(action_high)
+            power_mask = torch.zeros_like(action_high)
             power_mask[:, :generator_num] = 1   # represent active power control dimensions
             mask *= power_mask
 
-        # if norm_action:
-        #     # real_actions = np.zeros_like(sampled_actions)
-        #     real_actions = np.zeros((sampled_actions.shape[0], sampled_actions.shape[1], generator_num))
-        #     for i in range(sampled_actions.shape[1]):
-        #         real_actions[:, i, :] = self.modify_policy(
-        #             torch.from_numpy(sampled_actions[:, i, :generator_num]),
-        #               torch.from_numpy(ready_mask),
-        #               torch.from_numpy(closable_mask),
-        #               torch.from_numpy(action_high),
-        #               torch.from_numpy(action_low)
-        #               )
-        # else:
-        #     real_actions = sampled_actions
-        # real_actions = sampled_actions[:, :, :generator_num]
-        real_actions = np.concatenate((sampled_actions[:, :, :settings.balanced_id],
-                                       np.zeros_like(sampled_actions[:, :, :settings.balanced_id])[:, :, 0:1],
-                                       sampled_actions[:, :, settings.balanced_id:generator_num]), axis=2)
 
-        min_gen_p = np.expand_dims(np.append(np.array(settings.min_gen_p)[settings.thermal_ids], 0), axis=0).repeat(sampled_actions.shape[0], axis=0)
-        min_gen_p = np.expand_dims(min_gen_p, axis=1).repeat(sampled_actions.shape[1], axis=1)
+        real_actions = torch.cat((sampled_actions[:, :, :settings.balanced_id],
+                                  torch.zeros_like(sampled_actions[:, :, :settings.balanced_id])[:, :, 0:1],
+                                  sampled_actions[:, :, settings.balanced_id:generator_num]), dim=2)
+
+        min_gen_p = torch.from_numpy(np.append(np.array(settings.min_gen_p)[settings.thermal_ids], 0)).float()
+        min_gen_p = min_gen_p.unsqueeze(0).repeat(batch_size, 1).unsqueeze(1).repeat(1, num, 1).to('cuda')
         if self.config.parameters['only_power']:
-            delta = np.expand_dims(delta_load_p, axis=1).repeat(real_actions.shape[1], axis=1) - \
+            delta = delta_load_p.unsqueeze(1).repeat(1, num) - \
                     real_actions.sum(2) + \
-                    np.expand_dims(redundency_adjust, axis=1).repeat(real_actions.shape[1], axis=1) + \
+                    redundency_adjust.unsqueeze(1).repeat(1, num) + \
                     (-min_gen_p * open_one_hot + min_gen_p * close_one_hot).sum(2)
         else:
-            delta = np.expand_dims(delta_load_p, axis=1).repeat(real_actions.shape[1], axis=1) - \
+            delta = delta_load_p.unsqueeze(1).repeat(1, num, 1) - \
                     real_actions[:, :, :generator_num].sum(2) + \
-                    np.expand_dims(redundency_adjust, axis=1).repeat(real_actions.shape[1], axis=1) + \
+                    redundency_adjust.unsqueeze(1).repeat(1, num, 1) + \
                     (-min_gen_p * open_one_hot + min_gen_p * close_one_hot).sum(2)
 
-        # print(f'check bal round2 delta={delta}, max={np.max(np.abs(delta)):.3f}, min={np.min(np.abs(delta)):.3f}')
-        change_mask = (np.abs(delta) > 30).astype(np.float32)
-        change_mask = np.expand_dims(change_mask, axis=2).repeat(real_actions.shape[2], axis=2)
-        # change_mask = np.ones_like(change_mask)
+        # print(f'check bal round2 delta={delta}, max={torch.max(torch.abs(delta)):.3f}, min={torch.min(torch.abs(delta)):.3f}')
+        change_mask = (torch.abs(delta) > 30).float()
+        change_mask = change_mask.unsqueeze(2).repeat(1, 1, real_actions.shape[2])
+        delta = delta.unsqueeze(2).repeat(1, 1, real_actions.shape[-1])
+        action_high = action_high.unsqueeze(1).repeat(1, num, 1)
+        action_low = action_low.unsqueeze(1).repeat(1, num, 1)
+        mask = mask.unsqueeze(1).repeat(1, num, 1)
 
-        upgrade_redundency = (np.expand_dims(action_high, axis=1).repeat(real_actions.shape[1], axis=1) - real_actions) * \
-                             np.expand_dims(mask, axis=1).repeat(real_actions.shape[1], axis=1)
-        downgrade_redundency = (real_actions - np.expand_dims(action_low, axis=1).repeat(real_actions.shape[1], axis=1)) * \
-                               np.expand_dims(mask, axis=1).repeat(real_actions.shape[1], axis=1)
 
-        modification = (1 + np.sign(np.expand_dims(delta, axis=2).repeat(upgrade_redundency.shape[-1], axis=2))) / 2 * \
-                       np.expand_dims(delta, axis=2).repeat(upgrade_redundency.shape[-1], axis=2) * upgrade_redundency / (
-                                   np.expand_dims(upgrade_redundency.sum(2), axis=2).repeat(upgrade_redundency.shape[-1], axis=2) + 1e-3) + \
-                       (1 - np.sign(np.expand_dims(delta, axis=2).repeat(downgrade_redundency.shape[-1], axis=2))) / 2 * \
-                       np.expand_dims(delta, axis=2).repeat(downgrade_redundency.shape[-1], axis=2) * downgrade_redundency / (
-                                   np.expand_dims(downgrade_redundency.sum(2), axis=2).repeat(downgrade_redundency.shape[-1], axis=2) + 1e-3)
+        upgrade_redundency = (action_high - real_actions) * mask
+        downgrade_redundency = (real_actions - action_low) * mask
+
+        upgrade_redundency_sum = upgrade_redundency.sum(2, keepdims=True).repeat(1, 1, upgrade_redundency.shape[-1])
+        downgrade_redundency_sum = downgrade_redundency.sum(2, keepdims=True).repeat(1, 1, downgrade_redundency.shape[-1])
+        modification = (1 + torch.sign(delta)) / 2 * delta * upgrade_redundency / (upgrade_redundency_sum + 1e-3) + \
+                       (1 - torch.sign(delta)) / 2 * delta * downgrade_redundency / (downgrade_redundency_sum + 1e-3)
 
         modified_actions = real_actions + modification * change_mask
-        # print(np.expand_dims(delta_load_p, axis=1).repeat(real_actions.shape[1], axis=1) - \
-        #             modified_actions[:, :, :generator_num].sum(2) + \
-        #             np.expand_dims(redundency_adjust, axis=1).repeat(real_actions.shape[1], axis=1))
-        # real_actions += modification * change_mask * power_mask
 
-        # if not norm_action:
-        #     return real_actions.squeeze()
+        modified_sampled_actions = (modified_actions - action_low) / (action_high - action_low + 1e-3) * 2 - 1
+        modified_sampled_actions = torch.cat((modified_sampled_actions[:, :, :settings.balanced_id],
+                                                   modified_sampled_actions[:, :, settings.balanced_id + 1:]), dim=2)
 
-        modified_sampled_actions = (modified_actions - np.expand_dims(action_low, axis=1).repeat(modification.shape[1], axis=1)) / \
-                                   (np.expand_dims(action_high, axis=1).repeat(modified_actions.shape[1], axis=1) -
-                                    np.expand_dims(action_low, axis=1).repeat(modified_actions.shape[1], axis=1) + 1e-3) * 2 - 1
-        modified_sampled_actions = np.concatenate((modified_sampled_actions[:, :, :settings.balanced_id],
-                                                   modified_sampled_actions[:, :, settings.balanced_id + 1:]), axis=2)
-
-        mask = np.concatenate((mask[:, :settings.balanced_id], mask[:, settings.balanced_id + 1:]), axis=1)
-        inv_mask = np.ones_like(
-            mask) - mask  # represent non-adjustable generators, voltage control, closed or balance or open_gen_logit
-        modified_sampled_actions = modified_sampled_actions * np.expand_dims(mask, axis=1).repeat(modified_actions.shape[1], axis=1) + \
-                                   sampled_actions[:, :, :generator_num] * np.expand_dims(inv_mask, axis=1).repeat(real_actions.shape[1], axis=1)
+        mask = torch.cat((mask[:, :, :settings.balanced_id], mask[:, :, settings.balanced_id + 1:]), dim=2)
+        inv_mask = torch.ones_like(mask) - mask  # represent non-adjustable generators, voltage control, closed or balance or open_gen_logit
+        modified_sampled_actions = modified_sampled_actions * mask + sampled_actions[:, :, :generator_num] * inv_mask
 
         modified_sampled_actions = modified_sampled_actions.clip(-0.999, 0.999)
-        return np.concatenate((modified_sampled_actions, open_one_hot, close_one_hot), axis=2)
+        return torch.cat((modified_sampled_actions, open_one_hot, close_one_hot), dim=2)
 
     # @profile
     def recurrent_inference(self, h, action, attacker_action, to_plays, prev_r):
@@ -999,20 +980,20 @@ class MLPModel(nn.Module):
         # open_one_hots = torch.where(open_one_hots > 0)[-1].reshape(open_one_hots.shape[0], 1) / self.config.one_hot_dim
         # close_one_hots = torch.where(close_one_hots > 0)[-1].reshape(close_one_hots.shape[0], 1) / self.config.one_hot_dim
         # action = torch.cat((action[:, :self.config.generator_num], open_one_hots, close_one_hots), dim=-1)
-        # with autocast():
-        r = self.reward(h, action)
-        h = self.dynamics(h, action)
-        to_plays_r = torch.from_numpy(np.asarray(to_plays)).float().to('cuda')
-        to_plays_r = to_plays_r.reshape(to_plays_r.shape[0], 1).repeat(1, r.shape[1])
-        attacker_r = self.reward_attacker(h, attacker_action, prev_r)
-        r = (1 - to_plays_r) * r + to_plays_r * attacker_r
-        to_plays_h = torch.from_numpy(np.asarray(to_plays)).float().to('cuda')
-        to_plays_h = to_plays_h.reshape(to_plays_h.shape[0], 1).repeat(1, h.shape[1])
-        attacker_h = self.dynamics_attacker(h, attacker_action)
-        h = (1 - to_plays_h) * h + to_plays_h * attacker_h
-        pi = self.policy_no_split(h)
-        attacker_pi = self.policy_attacker(h)
-        if self.config.efficient_imitation:
-            pi = torch.cat((pi, self.expert(h)), dim=-1)
-        value = self.value(h)
+        with autocast():
+            r = self.reward(h, action)
+            h = self.dynamics(h, action)
+            to_plays_r = torch.from_numpy(np.asarray(to_plays)).float().to('cuda')
+            to_plays_r = to_plays_r.reshape(to_plays_r.shape[0], 1).repeat(1, r.shape[1])
+            attacker_r = self.reward_attacker(h, attacker_action, prev_r)
+            r = (1 - to_plays_r) * r + to_plays_r * attacker_r
+            to_plays_h = torch.from_numpy(np.asarray(to_plays)).float().to('cuda')
+            to_plays_h = to_plays_h.reshape(to_plays_h.shape[0], 1).repeat(1, h.shape[1])
+            attacker_h = self.dynamics_attacker(h, attacker_action)
+            h = (1 - to_plays_h) * h + to_plays_h * attacker_h
+            pi = self.policy_no_split(h)
+            attacker_pi = self.policy_attacker(h)
+            if self.config.efficient_imitation:
+                pi = torch.cat((pi, self.expert(h)), dim=-1)
+            value = self.value(h)
         return value, r, pi, attacker_pi, h

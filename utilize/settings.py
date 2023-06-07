@@ -36,8 +36,8 @@ for i in range(settings.num_gen):
         settings.max_steps_to_recover_gen.append(40)
         settings.max_steps_to_close_gen.append(40)
 
-settings.hard_overflow_bound = 1.5
-settings.soft_overflow_bound = 1.1
+settings.hard_overflow_bound = 1.6
+settings.soft_overflow_bound = 1.3
 settings.max_steps_soft_overflow = 8
 
 del dict_
